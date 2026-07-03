@@ -1,0 +1,4 @@
+build/
+sdkconfig.old
+.vscode/
+managed_components/
