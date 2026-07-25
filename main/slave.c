@@ -48,10 +48,19 @@ static const char *TAG = "slave";
 #define SEGMENT_BITS  200
 #define NUM_SEGMENTS  ((TRNG_PER_RUN * 32) / SEGMENT_BITS)   // 32000
 
-// Segments per run — must mirror the master's sensor.c exactly, or the two
-// nodes measure over different integration lengths.
+// Segments per run come FROM THE MASTER now (PLAN_4NODE Phase 5): 'B' and 'M'
+// carry the count, because Phase 5 made run length phase-dependent (a scoring
+// run holds its candidate number twice as long as a measurement run holds a
+// draw) and a duplicated constant on each side would let the nodes integrate
+// different windows while every published number stayed plausible.
+//
+// These remain only as the fallback for a master that sends no count — i.e. a
+// pre-Phase-5 image. A fallback is not a second source of truth: if it is ever
+// used the console says so.
 #define TRNG_SEGMENTS NUM_SEGMENTS   // 6.4 Mbit/run
 #define CAM_SEGMENTS  8000           // 1.6 Mbit/run ≈ 0.47 s at ~3.4 Mbit/s
+#define SEG_MIN        100
+#define SEG_MAX     200000
 
 // This node's own entropy source. It must be *independent* of the master's:
 // each node has its own camera, never a shared one, or the ÷√2 combination
@@ -215,13 +224,24 @@ static inline uint32_t noise_word(void)
     return RNG_REG;
 }
 
-static double gcp_zscore_raw(void)
+/* Segment count for this run: what the master asked for, or this node's own
+ * default if the command carried none. `arg` points just past the command
+ * letter (and past the ',' for 'B'). */
+static int seg_from_cmd(const char *arg)
 {
-    const bool cam  = (g_src == SRC_CAM);
-    const int  nseg = cam ? CAM_SEGMENTS : TRNG_SEGMENTS;
-    // Abort latency, not pacing: the camera run is 4x shorter in segments, so
-    // poll 4x more often to keep the response time comparable.
-    const int  poll = cam ? 2000 : 8000;
+    int nseg = arg ? atoi(arg) : 0;
+    if (nseg >= SEG_MIN && nseg <= SEG_MAX) return nseg;
+    nseg = (g_src == SRC_CAM) ? CAM_SEGMENTS : TRNG_SEGMENTS;
+    TLOG("no segment count on the wire -- falling back to %d (pre-Phase-5 master?)\n",
+         nseg);
+    return nseg;
+}
+
+static double gcp_zscore_raw(int nseg)
+{
+    // Abort latency, not pacing: keep the yield cadence a fixed fraction of the
+    // run so it stays matched to the master's at every run length.
+    const int poll = nseg / 4 + 1;
 
     double z_sum = 0.0;
     for (int seg = 0; seg < nseg; seg++) {
@@ -233,7 +253,7 @@ static double gcp_zscore_raw(void)
                  + __builtin_popcount(noise_word())
                  + __builtin_popcount(noise_word() & 0xFF);
         z_sum += (ones - 100.0) / 7.07106781;
-        if (seg % poll == 0) {   // TRNG: 4 yields/run (~40 ms), matching master
+        if (seg % poll == 0) {   // 4 yields/run, matching the master's cadence
             vTaskDelay(1);
             link_poll_abort();
             if (g_abort) return 0.0;
@@ -313,11 +333,14 @@ static httpd_handle_t start_webserver(void)
 /* ── Command loop ─────────────────────────────────────────────────────────
  * Protocol, unchanged from the UART era; only the framing around it is new
  * (see components/elotto_link/include/elotto_link.h):
- *   P      → OK                    (discovery, was the wired ping)
- *   B<n>   → OK                    (baseline, n runs)
- *   M      → Z:<float>,<C|T>       (measure; C = camera, T = TRNG fallback)
- *   D      → D:ready,bias,sigma,mbit_s,stalls,stuck,<C|T>
- *   A      → OK                    (abort)
+ *   P        → OK                  (discovery, was the wired ping)
+ *   B<n>,<s> → OK                  (baseline, n runs of s segments each)
+ *   M<s>     → Z:<float>,<C|T>     (measure s segments; C = camera, T = TRNG)
+ *   D        → D:ready,bias,sigma,mbit_s,stalls,stuck,<C|T>
+ *   A        → OK                  (abort)
+ *
+ * The segment counts on 'B'/'M' are the Phase 5 addition; everything else is
+ * unchanged from the UART era.
  */
 static void link_task(void *arg)
 {
@@ -365,6 +388,7 @@ static void link_task(void *arg)
         } else if (cmd[0] == 'B') {
             int cnt = atoi(cmd + 1);
             if (cnt <= 0 || cnt > 5000) cnt = 100;
+            const char *sarg = strchr(cmd, ',');
             g_abort = false;
             link_drain();   // a stale 'A' must not abort the session it precedes
             // Baseline marks the start of a session: re-arm the camera. Without
@@ -376,23 +400,26 @@ static void link_task(void *arg)
                 g_src_fell_back  = false;
                 g_fallback_logged = false;
             }
+            // After the camera re-arm above, so the fallback default matches
+            // the source this baseline will actually use.
+            int nseg = seg_from_cmd(sarg ? sarg + 1 : NULL);
             g_measuring = true;
             double bsum = 0.0;
             int    done = 0;
             for (; done < cnt && !g_abort; done++)
-                bsum += gcp_zscore_raw();
+                bsum += gcp_zscore_raw(nseg);
             g_measuring = false;
             g_baseline_mean = g_abort ? 0.0 : bsum / cnt;
             link_reply(&from, seq,"OK");
-            TLOG("Baseline done: mean=%.4f (%d/%d runs) source=%s\n",
-                 g_baseline_mean, done, cnt,
+            TLOG("Baseline done: mean=%.4f (%d/%d runs, %d seg) source=%s\n",
+                 g_baseline_mean, done, cnt, nseg,
                  (g_src == SRC_CAM) ? "camera" : "TRNG");
             log_camera_stats("after-baseline");
 
         } else if (cmd[0] == 'M') {
             g_abort = false;
             g_measuring = true;
-            double z = gcp_zscore_raw() - g_baseline_mean;
+            double z = gcp_zscore_raw(seg_from_cmd(cmd + 1)) - g_baseline_mean;
             g_measuring = false;
             // Reply carries the source this run actually used: 'C' camera,
             // 'T' TRNG. Appended after the float so atof() still parses it.
