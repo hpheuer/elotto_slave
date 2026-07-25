@@ -182,6 +182,15 @@ void app_main(void)
             int cnt = atoi(line + 1);
             if (cnt <= 0 || cnt > 5000) cnt = 100;
             g_abort = false;
+            // Baseline marks the start of a session: re-arm the camera. Without
+            // this, one transient stall latches this node to TRNG until power
+            // cycle, and since the master now aborts any camera session whose
+            // slave reports 'T', every later session would abort on arrival.
+            if (camera_is_ready()) {
+                g_src = SRC_CAM;
+                g_src_fell_back  = false;
+                g_fallback_logged = false;
+            }
             double bsum = 0.0;
             int    done = 0;
             for (; done < cnt && !g_abort; done++)
