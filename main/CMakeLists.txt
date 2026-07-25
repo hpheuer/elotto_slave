@@ -1,2 +1,4 @@
 idf_component_register(SRCS "slave.c" INCLUDE_DIRS "."
-                       REQUIRES elotto_camera esp_driver_uart esp_timer)
+                       REQUIRES elotto_camera elotto_link elotto_ota
+                                esp_timer esp_eth esp_netif esp_event
+                                esp_http_server nvs_flash lwip)

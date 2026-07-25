@@ -10,6 +10,20 @@ CONFIG_ESP_REV_MIN_FULL=0
 CONFIG_ESP32P4_REV_MAX_FULL=199
 CONFIG_ESP_REV_MAX_FULL=199
 
+# --- Flash and partitions (docs/PLAN_NETWORK.md Phase A/C) ------------------
+# Must match the master and the updater exactly: the SAME partitions.csv, or a
+# board flashed by one project cannot be updated by another. The repos are
+# siblings on disk, hence the ../elotto path.
+CONFIG_ESPTOOLPY_FLASHSIZE_32MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="32MB"
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="../elotto/partitions.csv"
+
+# Rollback defaults to n. With it on, an image that cannot answer over the
+# network is reverted on the next boot — which is why this firmware must bring
+# up Ethernet and a webserver before it marks itself valid (Phase C).
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
 # --- OV5647 camera entropy (PLAN_4NODE Phase 2) -----------------------------
 # PSRAM is mandatory: the capture buffers (4 x 640 KB) and the extraction ring
 # cannot fit in internal SRAM.
@@ -17,8 +31,11 @@ CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_HEX=y
 CONFIG_SPIRAM_SPEED_200M=y
 
-# Sensor driver
+# Sensor driver. The mode is load-bearing and must match the master's: every
+# gate in PLAN_4NODE was measured at RAW8 800x800 @ 50 fps.
 CONFIG_CAMERA_OV5647=y
+CONFIG_CAMERA_OV5647_MIPI_RAW8_800X800_50FPS=y
+CONFIG_CAMERA_OV5647_MIPI_DEFAULT_FMT_RAW8_800X800_50FPS=y
 
 # Shared elotto_camera component. Pins match the master (Espressif's
 # Function-EV-Board reference for the 15-pin MIPI-CSI FPC connector); XCLK stays
@@ -32,3 +49,11 @@ CONFIG_ELOTTO_CAM_PWDN_PIN=-1
 CONFIG_ELOTTO_CAM_XOR_FOLD=y
 CONFIG_ELOTTO_CAM_REG_EXPOSURE=16
 CONFIG_ELOTTO_CAM_REG_GAIN=1023
+
+# No DVP camera on these boards — MIPI-CSI only; keeping it off avoids linking a
+# device we never open. Matches the master.
+CONFIG_ESP_VIDEO_ENABLE_DVP_VIDEO_DEVICE=n
+
+# --- HTTP server (Phase C: the slave is now OTA-updatable like every node) ---
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
+CONFIG_HTTPD_MAX_URI_LEN=512
