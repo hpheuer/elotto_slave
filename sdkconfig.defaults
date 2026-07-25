@@ -1,5 +1,34 @@
+# The boards are ESP32-P4 rev v1.3. ESP32P4_REV_MIN_0 *depends on*
+# ESP32P4_SELECTS_REV_LESS_V3, which defaults to n — without the line below the
+# choice silently falls back to ESP32P4_REV_MIN_301 (rev v3.1) and the resulting
+# binary refuses to boot on rev 1.x hardware. Support for <3.0 and >=3.0 is
+# mutually exclusive, so this must come first.
+CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
 CONFIG_ESP32P4_REV_MIN_0=y
 CONFIG_ESP32P4_REV_MIN_FULL=0
 CONFIG_ESP_REV_MIN_FULL=0
 CONFIG_ESP32P4_REV_MAX_FULL=199
 CONFIG_ESP_REV_MAX_FULL=199
+
+# --- OV5647 camera entropy (PLAN_4NODE Phase 2) -----------------------------
+# PSRAM is mandatory: the capture buffers (4 x 640 KB) and the extraction ring
+# cannot fit in internal SRAM.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_HEX=y
+CONFIG_SPIRAM_SPEED_200M=y
+
+# Sensor driver
+CONFIG_CAMERA_OV5647=y
+
+# Shared elotto_camera component. Pins match the master (Espressif's
+# Function-EV-Board reference for the 15-pin MIPI-CSI FPC connector); XCLK stays
+# unwired because RPi-style OV5647 modules clock themselves.
+CONFIG_ELOTTO_CAM_ENABLE=y
+CONFIG_ELOTTO_CAM_SCL_PIN=8
+CONFIG_ELOTTO_CAM_SDA_PIN=7
+CONFIG_ELOTTO_CAM_XCLK_PIN=-1
+CONFIG_ELOTTO_CAM_RESET_PIN=-1
+CONFIG_ELOTTO_CAM_PWDN_PIN=-1
+CONFIG_ELOTTO_CAM_XOR_FOLD=y
+CONFIG_ELOTTO_CAM_REG_EXPOSURE=16
+CONFIG_ELOTTO_CAM_REG_GAIN=1023

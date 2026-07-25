@@ -2008,6 +2008,8 @@ CONFIG_ESP32P4_UNIVERSAL_MAC_ADDRESSES=1
 # default:
 CONFIG_ESP_SLEEP_FLASH_LEAKAGE_WORKAROUND=y
 # default:
+CONFIG_ESP_SLEEP_PSRAM_LEAKAGE_WORKAROUND=y
+# default:
 # CONFIG_ESP_SLEEP_MSPI_NEED_ALL_IO_PU is not set
 # default:
 CONFIG_ESP_SLEEP_GPIO_RESET_WORKAROUND=y
@@ -2250,8 +2252,48 @@ CONFIG_ESP_NETIF_RECEIVE_REPORT_ERRORS=y
 #
 # ESP PSRAM
 #
+CONFIG_SPIRAM=y
+
+#
+# PSRAM config
+#
+CONFIG_SPIRAM_MODE_HEX=y
+CONFIG_SPIRAM_SPEED_200M=y
+# CONFIG_SPIRAM_SPEED_80M is not set
+# CONFIG_SPIRAM_SPEED_20M is not set
 # default:
-# CONFIG_SPIRAM is not set
+CONFIG_SPIRAM_SPEED=200
+# default:
+# CONFIG_SPIRAM_XIP_FROM_PSRAM is not set
+# default:
+# CONFIG_SPIRAM_ECC_ENABLE is not set
+# default:
+CONFIG_SPIRAM_BOOT_HW_INIT=y
+# default:
+CONFIG_SPIRAM_BOOT_INIT=y
+# default:
+CONFIG_SPIRAM_PRE_CONFIGURE_MEMORY_PROTECTION=y
+# default:
+# CONFIG_SPIRAM_IGNORE_NOTFOUND is not set
+# default:
+# CONFIG_SPIRAM_USE_MEMMAP is not set
+# default:
+# CONFIG_SPIRAM_USE_CAPS_ALLOC is not set
+# default:
+CONFIG_SPIRAM_USE_MALLOC=y
+# default:
+CONFIG_SPIRAM_MEMTEST=y
+# default:
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384
+# default:
+# CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP is not set
+# default:
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=32768
+# default:
+# CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY is not set
+# default:
+# CONFIG_SPIRAM_ALLOW_NOINIT_SEG_EXTERNAL_MEMORY is not set
+# end of PSRAM config
 # end of ESP PSRAM
 
 #
@@ -2562,6 +2604,8 @@ CONFIG_FATFS_TIMEOUT_MS=10000
 # default:
 CONFIG_FATFS_PER_FILE_CACHE=y
 # default:
+CONFIG_FATFS_ALLOC_PREFER_EXTRAM=y
+# default:
 # CONFIG_FATFS_USE_FASTSEEK is not set
 # default:
 CONFIG_FATFS_USE_STRFUNC_NONE=y
@@ -2685,6 +2729,8 @@ CONFIG_FREERTOS_SYSTICK_USES_SYSTIMER=y
 #
 # Extra
 #
+# default:
+CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM=y
 # end of Extra
 
 # default:
@@ -3191,6 +3237,8 @@ CONFIG_MBEDTLS_HAVE_TIME=y
 # default:
 CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC=y
 # default:
+# CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC is not set
+# default:
 # CONFIG_MBEDTLS_DEFAULT_MEM_ALLOC is not set
 # default:
 # CONFIG_MBEDTLS_CUSTOM_MEM_ALLOC is not set
@@ -3546,6 +3594,8 @@ CONFIG_MBEDTLS_PKCS1_V21=y
 # default:
 # CONFIG_NVS_LEGACY_DUP_KEYS_COMPATIBILITY is not set
 # default:
+# CONFIG_NVS_ALLOCATE_CACHE_IN_SPIRAM is not set
+# default:
 # CONFIG_NVS_BDL_STACK is not set
 # default:
 # CONFIG_NVS_FLASH_VERIFY_ERASE is not set
@@ -3864,6 +3914,347 @@ CONFIG_WL_SECTOR_SIZE_4096=y
 # default:
 CONFIG_WL_SECTOR_SIZE=4096
 # end of Wear Levelling
+
+#
+# Elotto Camera (OV5647 dark-frame entropy)
+#
+CONFIG_ELOTTO_CAM_ENABLE=y
+CONFIG_ELOTTO_CAM_XCLK_PIN=-1
+# default:
+CONFIG_ELOTTO_CAM_XCLK_FREQ=24000000
+# default:
+CONFIG_ELOTTO_CAM_SCCB_I2C_PORT=0
+# default:
+CONFIG_ELOTTO_CAM_SCCB_I2C_FREQ=100000
+CONFIG_ELOTTO_CAM_SCL_PIN=8
+CONFIG_ELOTTO_CAM_SDA_PIN=7
+CONFIG_ELOTTO_CAM_RESET_PIN=-1
+CONFIG_ELOTTO_CAM_PWDN_PIN=-1
+CONFIG_ELOTTO_CAM_XOR_FOLD=y
+CONFIG_ELOTTO_CAM_REG_EXPOSURE=16
+CONFIG_ELOTTO_CAM_REG_GAIN=1023
+# end of Elotto Camera (OV5647 dark-frame entropy)
+
+#
+# CMake Utilities
+#
+# default:
+# CONFIG_CU_RELINKER_ENABLE is not set
+# default:
+# CONFIG_CU_DIAGNOSTICS_COLOR_NEVER is not set
+# default:
+CONFIG_CU_DIAGNOSTICS_COLOR_ALWAYS=y
+# default:
+# CONFIG_CU_DIAGNOSTICS_COLOR_AUTO is not set
+# default:
+# CONFIG_CU_GCC_LTO_ENABLE is not set
+# default:
+# CONFIG_CU_GCC_STRING_1BYTE_ALIGN is not set
+# end of CMake Utilities
+
+#
+# Espressif Camera Sensors Configurations
+#
+
+#
+# Camera Sensor Configuration
+#
+
+#
+# Select and Set Camera Sensor
+#
+# default:
+# CONFIG_CAMERA_BF3901 is not set
+# default:
+# CONFIG_CAMERA_BF3925 is not set
+# default:
+# CONFIG_CAMERA_BF3A03 is not set
+# default:
+# CONFIG_CAMERA_BF20A6 is not set
+# default:
+# CONFIG_CAMERA_BF3045 is not set
+# default:
+# CONFIG_CAMERA_GC0308 is not set
+# default:
+# CONFIG_CAMERA_GC2145 is not set
+# default:
+# CONFIG_CAMERA_LT6911 is not set
+# default:
+# CONFIG_CAMERA_MIRA220 is not set
+# default:
+# CONFIG_CAMERA_MT9D111 is not set
+# default:
+# CONFIG_CAMERA_OS02N10 is not set
+# default:
+# CONFIG_CAMERA_OS04C10 is not set
+# default:
+# CONFIG_CAMERA_OV2640 is not set
+# default:
+# CONFIG_CAMERA_OV2710 is not set
+# default:
+# CONFIG_CAMERA_OV3660 is not set
+# default:
+# CONFIG_CAMERA_OV5640 is not set
+# default:
+# CONFIG_CAMERA_OV5645 is not set
+CONFIG_CAMERA_OV5647=y
+
+#
+# Auto detect OV5647
+#
+# default:
+CONFIG_CAMERA_OV5647_AUTO_DETECT_MIPI_INTERFACE_SENSOR=y
+# end of Auto detect OV5647
+
+#
+# Choose supported formats for MIPI CSI interface
+#
+# default:
+# CONFIG_CAMERA_OV5647_MIPI_RAW8_800X640_50FPS is not set
+# default:
+CONFIG_CAMERA_OV5647_MIPI_RAW8_800X800_50FPS=y
+# default:
+# CONFIG_CAMERA_OV5647_MIPI_RAW8_800X1280_50FPS is not set
+# default:
+# CONFIG_CAMERA_OV5647_MIPI_RAW10_1920X1080_30FPS is not set
+# default:
+# CONFIG_CAMERA_OV5647_MIPI_RAW10_1280X960_BINNING_45FPS is not set
+# end of Choose supported formats for MIPI CSI interface
+
+# default:
+CONFIG_CAMERA_OV5647_MIPI_DEFAULT_FMT_RAW8_800X800_50FPS=y
+# default:
+CONFIG_CAMERA_OV5647_MIPI_IF_FORMAT_INDEX_DEFAULT=2
+# default:
+CONFIG_CAMERA_OV5647_CSI_LINESYNC_ENABLE=y
+# default:
+# CONFIG_CAMERA_OV5647_ENABLE_MOTOR_BY_GPIO0 is not set
+# default:
+CONFIG_CAMERA_OV5647_DEFAULT_IPA_JSON_CONFIGURATION_FILE=y
+# default:
+# CONFIG_CAMERA_OV5647_CUSTOMIZED_IPA_JSON_CONFIGURATION_FILE is not set
+# default:
+# CONFIG_CAMERA_OV9281 is not set
+# default:
+# CONFIG_CAMERA_SC030IOT is not set
+# default:
+# CONFIG_CAMERA_SC035HGS is not set
+# default:
+# CONFIG_CAMERA_SC101IOT is not set
+# default:
+# CONFIG_CAMERA_SC121AT is not set
+# default:
+# CONFIG_CAMERA_SC1346 is not set
+# default:
+# CONFIG_CAMERA_SC202CS is not set
+# default:
+# CONFIG_CAMERA_SC2336 is not set
+# default:
+# CONFIG_CAMERA_SP0A39 is not set
+# default:
+# CONFIG_CAMERA_STI2250 is not set
+# default:
+# CONFIG_CAMERA_PIVARIETY is not set
+# default:
+# CONFIG_CAMERA_ARDUCAM_IMX500 is not set
+# end of Select and Set Camera Sensor
+# end of Camera Sensor Configuration
+
+#
+# Camera XCLK Generator Configuration
+#
+# default:
+# CONFIG_CAMERA_XCLK_USE_LEDC is not set
+# default:
+CONFIG_CAMERA_XCLK_USE_ESP_CLOCK_ROUTER=y
+# end of Camera XCLK Generator Configuration
+
+#
+# Camera Motor Control Configuration
+#
+# default:
+# CONFIG_CAM_MOTOR_DW9714 is not set
+# end of Camera Motor Control Configuration
+
+# default:
+CONFIG_CAM_CTRL_SPI_ENABLE=y
+# default:
+CONFIG_CAM_CTLR_SPI_ISR_CACHE_SAFE=y
+# default:
+# CONFIG_CAM_CTLR_SPI_DISABLE_BACKUP_BUFFER is not set
+# default:
+# CONFIG_CAM_CTLR_SPI_DISABLE_AUTO_DECODE is not set
+# default:
+CONFIG_CAM_CTLR_SPI_DECODE_TASK_STACK_SIZE=4096
+# default:
+CONFIG_CAM_CTLR_SPI_DECODE_TASK_PRIORITY=10
+# default:
+# CONFIG_CAM_CTLR_SPI_ENABLE_PARLIO is not set
+# default:
+CONFIG_CAMERA_SENSOR_MOTOR_DETECT_METHOD_DYNAMIC_LINK=y
+# default:
+# CONFIG_CAMERA_SENSOR_MOTOR_DETECT_METHOD_STATIC_STORE is not set
+# end of Espressif Camera Sensors Configurations
+
+#
+# ESP H264 Configuration
+#
+# default:
+CONFIG_ESP_H264_DECODER_IRAM=y
+# default:
+# CONFIG_ESP_H264_DUAL_TASK is not set
+# end of ESP H264 Configuration
+
+#
+# Espressif Image Process Algorithm Configuration
+#
+# default:
+CONFIG_ESP_IPA_CONFIG_PARAM_VERSION=1
+# default:
+CONFIG_ESP_IPA_IAN_ALGORITHM=y
+# default:
+CONFIG_ESP_IPA_ADN_ALGORITHM=y
+# default:
+CONFIG_ESP_IPA_AWB_ALGORITHM=y
+# default:
+CONFIG_ESP_IPA_ACC_ALGORITHM=y
+# default:
+CONFIG_ESP_IPA_AGC_ALGORITHM=y
+# default:
+CONFIG_ESP_IPA_AEN_ALGORITHM=y
+# default:
+CONFIG_ESP_IPA_AF_ALGORITHM=y
+# default:
+CONFIG_ESP_IPA_ATC_ALGORITHM=y
+# default:
+CONFIG_ESP_IPA_EXT_CONFIG=y
+# default:
+CONFIG_ESP_IPA_DETECT_METHOD_DYNAMIC_LINK=y
+# default:
+# CONFIG_ESP_IPA_DETECT_METHOD_STATIC_STORE is not set
+# end of Espressif Image Process Algorithm Configuration
+
+#
+# Espressif SCCB Configurations
+#
+# default:
+CONFIG_ESP_SCCB_TRANS_TIMEOUT_DEFAULT=500
+# end of Espressif SCCB Configurations
+
+#
+# Espressif Video Configuration
+#
+# default:
+CONFIG_ESP_VIDEO_ENABLE_ISP=y
+# default:
+CONFIG_ESP_VIDEO_ENABLE_DATA_PREPROCESSING=y
+# default:
+CONFIG_ESP_VIDEO_CHECK_PARAMETERS=y
+# default:
+CONFIG_ESP_VIDEO_ENABLE_MIPI_CSI_VIDEO_DEVICE=y
+# default:
+CONFIG_ESP_VIDEO_DISABLE_MIPI_CSI_DRIVER_BACKUP_BUFFER=y
+# default:
+CONFIG_ESP_VIDEO_ENABLE_DVP_VIDEO_DEVICE=y
+# default:
+# CONFIG_ESP_VIDEO_ENABLE_SPI_VIDEO_DEVICE is not set
+# default:
+# CONFIG_ESP_VIDEO_ENABLE_USB_UVC_VIDEO_DEVICE is not set
+# default:
+# CONFIG_ESP_VIDEO_ENABLE_HW_H264_VIDEO_DEVICE is not set
+# default:
+# CONFIG_ESP_VIDEO_ENABLE_HW_JPEG_ENC_VIDEO_DEVICE is not set
+# default:
+# CONFIG_ESP_VIDEO_ENABLE_HW_JPEG_DEC_VIDEO_DEVICE is not set
+# default:
+CONFIG_ESP_VIDEO_ENABLE_ISP_VIDEO_DEVICE=y
+# default:
+# CONFIG_ESP_VIDEO_ENABLE_ISP_PIPELINE_CONTROLLER is not set
+
+#
+# Video Data Preprocessing
+#
+# default:
+CONFIG_ESP_VIDEO_ENABLE_SWAP_SHORT=y
+# default:
+CONFIG_ESP_VIDEO_ENABLE_SWAP_SHORT_RISCV=y
+# default:
+# CONFIG_ESP_VIDEO_ENABLE_SWAP_SHORT_PIE is not set
+# default:
+# CONFIG_ESP_VIDEO_ENABLE_SWAP_SHORT_BITSCRAMBLER is not set
+# default:
+# CONFIG_ESP_VIDEO_ENABLE_SWAP_SHORT_PERF_LOG is not set
+# default:
+CONFIG_ESP_VIDEO_ENABLE_SWAP_BYTE=y
+# default:
+CONFIG_ESP_VIDEO_ENABLE_SWAP_BYTE_RISCV=y
+# default:
+# CONFIG_ESP_VIDEO_ENABLE_SWAP_BYTE_BITSCRAMBLER is not set
+# end of Video Data Preprocessing
+# end of Espressif Video Configuration
+
+#
+# USB-OTG
+#
+# default:
+CONFIG_USB_HOST_CONTROL_TRANSFER_MAX_SIZE=256
+# default:
+CONFIG_USB_HOST_HW_BUFFER_BIAS_BALANCED=y
+# default:
+# CONFIG_USB_HOST_HW_BUFFER_BIAS_IN is not set
+# default:
+# CONFIG_USB_HOST_HW_BUFFER_BIAS_PERIODIC_OUT is not set
+
+#
+# Hub Driver Configuration
+#
+
+#
+# Root Port configuration
+#
+# default:
+CONFIG_USB_HOST_DEBOUNCE_DELAY_MS=250
+# default:
+CONFIG_USB_HOST_RESET_HOLD_MS=30
+# default:
+CONFIG_USB_HOST_RESET_RECOVERY_MS=30
+# default:
+CONFIG_USB_HOST_SET_ADDR_RECOVERY_MS=10
+# default:
+CONFIG_USB_HOST_RESUME_HOLD_MS=30
+# default:
+CONFIG_USB_HOST_RESUME_RECOVERY_MS=20
+# default:
+CONFIG_USB_HOST_SUSPEND_ENTRY_MS=20
+# end of Root Port configuration
+
+# default:
+# CONFIG_USB_HOST_HUBS_SUPPORTED is not set
+# end of Hub Driver Configuration
+
+#
+# Power management
+#
+# end of Power management
+
+# default:
+# CONFIG_USB_HOST_ENABLE_ENUM_FILTER_CALLBACK is not set
+# default:
+# CONFIG_USB_HOST_DWC_DMA_CAP_MEMORY_IN_PSRAM is not set
+# default:
+CONFIG_USB_OTG_SUPPORTED=y
+# end of USB-OTG
+
+#
+# USB HOST UVC
+#
+# default:
+# CONFIG_UVC_PRINTF_CONFIGURATION_DESCRIPTOR is not set
+# default:
+CONFIG_UVC_INTERVAL_ARRAY_SIZE=3
+# default:
+CONFIG_UVC_CHECK_PAYLOAD_HEADER_EOH=y
+# end of USB HOST UVC
 # end of Component config
 
 # default:
@@ -3966,6 +4357,7 @@ CONFIG_TIMER_TASK_PRIORITY=1
 CONFIG_TIMER_TASK_STACK_DEPTH=2048
 CONFIG_TIMER_QUEUE_LENGTH=10
 # CONFIG_ENABLE_STATIC_TASK_CLEAN_UP_HOOK is not set
+CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y
 # CONFIG_HAL_ASSERTION_SILIENT is not set
 # CONFIG_L2_TO_L3_COPY is not set
 CONFIG_ESP_GRATUITOUS_ARP=y
@@ -4003,4 +4395,10 @@ CONFIG_SPI_FLASH_WRITING_DANGEROUS_REGIONS_ABORTS=y
 CONFIG_SUPPRESS_SELECT_DEBUG_OUTPUT=y
 # CONFIG_SUPPORT_TERMIOS is not set
 CONFIG_SEMIHOSTFS_MAX_MOUNT_POINTS=1
+# CONFIG_CAMERA_OV5647_MIPI_RAW8_800x640_50FPS is not set
+CONFIG_CAMERA_OV5647_MIPI_RAW8_800x800_50FPS=y
+# CONFIG_CAMERA_OV5647_MIPI_RAW8_800x1280_50FPS is not set
+# CONFIG_CAMERA_OV5647_MIPI_RAW10_1920x1080_30FPS is not set
+# CONFIG_CAMERA_OV5647_MIPI_RAW10_1280x960_BINNING_45FPS is not set
+# CONFIG_ESP_VIDEO_ENABLE_HW_JPEG_VIDEO_DEVICE is not set
 # End of deprecated options
