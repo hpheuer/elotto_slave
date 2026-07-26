@@ -31,6 +31,7 @@
 #include "esp_http_server.h"
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
+#include "esp_system.h"
 #include "nvs_flash.h"
 #include "lwip/sockets.h"
 #include "lwip/inet.h"
@@ -43,32 +44,27 @@ static const char *TAG = "slave";
 #define TLOG(fmt, ...) do { uint64_t _ms = esp_timer_get_time() / 1000; \
     printf("[%5llu.%03llu] " fmt, _ms / 1000, _ms % 1000, ##__VA_ARGS__); } while(0)
 
-// Direkter TRNG-Register-Zugriff (identisch mit Master)
-#define RNG_REG       (*((volatile uint32_t *)0x501101A4UL))
-#define TRNG_PER_RUN  200000
-#define SEGMENT_BITS  200
-#define NUM_SEGMENTS  ((TRNG_PER_RUN * 32) / SEGMENT_BITS)   // 32000
+#define SEGMENT_BITS  200      // 6 words + 8 bits, per z segment
 
 // Segments per run come FROM THE MASTER now (PLAN_4NODE Phase 5): 'B' and 'M'
-// carry the count, because Phase 5 made run length phase-dependent (a scoring
-// run holds its candidate number twice as long as a measurement run holds a
-// draw) and a duplicated constant on each side would let the nodes integrate
-// different windows while every published number stayed plausible.
+// carry the count, so a duplicated constant on each side cannot let the nodes
+// integrate different windows while every published number stays plausible.
 //
-// These remain only as the fallback for a master that sends no count — i.e. a
-// pre-Phase-5 image. A fallback is not a second source of truth: if it is ever
-// used the console says so.
-#define TRNG_SEGMENTS NUM_SEGMENTS   // 6.4 Mbit/run
+// CAM_SEGMENTS remains only as the fallback for a master that sends no count —
+// i.e. a pre-Phase-5 image. A fallback is not a second source of truth: if it
+// is ever used the console says so.
 #define CAM_SEGMENTS  8000           // 1.6 Mbit/run ≈ 0.47 s at ~3.4 Mbit/s
 #define SEG_MIN        100
 #define SEG_MAX     200000
 
-// This node's own entropy source. It must be *independent* of the master's:
-// each node has its own camera, never a shared one, or the ÷√2 combination
-// would be counting one measurement twice.
-typedef enum { SRC_TRNG = 0, SRC_CAM = 1 } SlaveSource;
-static volatile SlaveSource g_src = SRC_TRNG;
-static volatile bool        g_src_fell_back = false;
+/* ENTROPY IS PHOTONS, AND ONLY PHOTONS (user decision, 2026-07-26).
+ *
+ * The on-chip TRNG is removed from this firmware. This node measures its OWN
+ * OV5647 — never one shared with the master, or the ÷√k combination would be
+ * counting one measurement twice — and if that camera stops delivering there is
+ * nothing to fall back to by design. The node reports "E:<reason>" instead of a
+ * z and the master reboots it. See sensor.h in the master repo for why. */
+static volatile bool g_cam_fault = false;   // camera died during the current run
 
 /* The calibration sweep's table (~1.2 KB). PSRAM and allocated once: the camera
  * already makes PSRAM mandatory, and a struct this size does not belong on the
@@ -78,7 +74,6 @@ static camera_cal_t *s_cal;
 
 static double        g_baseline_mean = 0.0;
 static volatile bool g_abort         = false;
-static bool          g_fallback_logged = false;
 static volatile bool g_measuring     = false;   // refuses OTA mid-measurement
 
 /* ── Ethernet (Waveshare ESP32-P4-ETH, IP101GRI over RMII) ─────────────
@@ -217,18 +212,13 @@ static void link_drain(void)
 
 /* ── Measurement (unchanged from the UART era — see file header) ──────── */
 
-// Mirrors the master's noise_word(): on a camera stall, latch to the TRNG so
-// every later word does not re-pay the stall timeout, and remember that this
-// run is no longer camera-sourced so the master can be told.
-static inline uint32_t noise_word(void)
+// Mirrors the master's noise_word(). There is no fallback to mirror any more:
+// a failed read means the run is void, and bits are never invented to cover it.
+static inline bool noise_word(uint32_t *w)
 {
-    if (g_src == SRC_CAM) {
-        uint32_t w;
-        if (camera_read_word(&w)) return w;
-        g_src = SRC_TRNG;
-        g_src_fell_back = true;
-    }
-    return RNG_REG;
+    if (camera_read_word(w)) return true;
+    g_cam_fault = true;
+    return false;
 }
 
 /* Segment count for this run: what the master asked for, or this node's own
@@ -238,13 +228,16 @@ static int seg_from_cmd(const char *arg)
 {
     int nseg = arg ? atoi(arg) : 0;
     if (nseg >= SEG_MIN && nseg <= SEG_MAX) return nseg;
-    nseg = (g_src == SRC_CAM) ? CAM_SEGMENTS : TRNG_SEGMENTS;
     TLOG("no segment count on the wire -- falling back to %d (pre-Phase-5 master?)\n",
-         nseg);
-    return nseg;
+         CAM_SEGMENTS);
+    return CAM_SEGMENTS;
 }
 
-static double gcp_zscore_raw(int nseg)
+/* One run. Returns false if it produced no usable z — either the master aborted
+ * it, or the camera stopped delivering (g_cam_fault, which the caller turns into
+ * an "E:" reply). A short run is not a small run: its z would be normalised by
+ * a √segments it never reached, so a void run yields nothing at all. */
+static bool gcp_zscore_raw(int nseg, double *out)
 {
     // Abort latency, not pacing: keep the yield cadence a fixed fraction of the
     // run so it stays matched to the master's at every run length.
@@ -252,21 +245,24 @@ static double gcp_zscore_raw(int nseg)
 
     double z_sum = 0.0;
     for (int seg = 0; seg < nseg; seg++) {
-        int ones = __builtin_popcount(noise_word())
-                 + __builtin_popcount(noise_word())
-                 + __builtin_popcount(noise_word())
-                 + __builtin_popcount(noise_word())
-                 + __builtin_popcount(noise_word())
-                 + __builtin_popcount(noise_word())
-                 + __builtin_popcount(noise_word() & 0xFF);
+        uint32_t w;
+        int ones = 0;
+        for (int i = 0; i < 6; i++) {
+            if (!noise_word(&w)) return false;
+            ones += __builtin_popcount(w);
+        }
+        if (!noise_word(&w)) return false;
+        ones += __builtin_popcount(w & 0xFF);   // 200 bits = SEGMENT_BITS
+
         z_sum += (ones - 100.0) / 7.07106781;
         if (seg % poll == 0) {   // 4 yields/run, matching the master's cadence
             vTaskDelay(1);
             link_poll_abort();
-            if (g_abort) return 0.0;
+            if (g_abort) return false;
         }
     }
-    return z_sum / sqrt((double)nseg);
+    *out = z_sum / sqrt((double)nseg);
+    return true;
 }
 
 /* ── HTTP: own /diag, plus the shared update endpoints ────────────────── */
@@ -279,8 +275,9 @@ static esp_err_t diag_handler(httpd_req_t *req)
     camera_get_stats(&cs);
     char buf[768];
     int  pos = snprintf(buf, sizeof(buf),
-        "{\"role\":\"slave\",\"src\":\"%s\",\"measuring\":%s,\"baseline_mean\":%.4f,",
-        (g_src == SRC_CAM) ? "cam" : "trng", g_measuring ? "true" : "false",
+        "{\"role\":\"slave\",\"src\":\"camera-only\",\"cam_fault\":%s,"
+        "\"measuring\":%s,\"baseline_mean\":%.4f,",
+        g_cam_fault ? "true" : "false", g_measuring ? "true" : "false",
         g_baseline_mean);
     pos += elotto_ota_status_json(buf + pos, sizeof(buf) - pos);
     snprintf(buf + pos, sizeof(buf) - pos,
@@ -343,9 +340,11 @@ static httpd_handle_t start_webserver(void)
  *   P        → OK                  (discovery, was the wired ping)
  *   K<ms>    → OK:exp,gain,fold,bias,mbit_s,<G|U>   (calibrate the camera)
  *   B<n>,<s> → OK                  (baseline, n runs of s segments each)
- *   M<s>     → Z:<float>,<C|T>     (measure s segments; C = camera, T = TRNG)
- *   D        → D:ready,bias,sigma,mbit_s,stalls,stuck,<C|T>
+ *   M<s>     → Z:<float>            (measure s segments)
+ *              E:<reason>          (camera stopped -- no z exists for this run)
+ *   D        → D:ready,bias,sigma,mbit_s,stalls,stuck
  *   A        → OK                  (abort)
+ *   R        → OK, then reboot     (ordered after a camera fault)
  *
  * The segment counts on 'B'/'M' are the Phase 5 addition; 'K' is Task 1 of
  * docs/PLAN.md. Everything else is unchanged from the UART era.
@@ -379,8 +378,8 @@ static void link_task(void *arg)
         vTaskDelete(NULL);
         return;
     }
-    TLOG("GCP-Slave ready  UDP port %d  source=%s\n",
-         ELOTTO_LINK_CMD_PORT, (g_src == SRC_CAM) ? "camera" : "TRNG");
+    TLOG("GCP-Slave ready  UDP port %d  source=camera-only  streaming=%s\n",
+         ELOTTO_LINK_CMD_PORT, camera_is_ready() ? "yes" : "NO");
 
     char buf[ELOTTO_LINK_MAX];
     for (;;) {
@@ -453,63 +452,94 @@ static void link_task(void *arg)
             if (cnt <= 0 || cnt > 5000) cnt = 100;
             const char *sarg = strchr(cmd, ',');
             g_abort = false;
+            g_cam_fault = false;
             link_drain();   // a stale 'A' must not abort the session it precedes
-            // Baseline marks the start of a session: re-arm the camera. Without
-            // this, one transient stall latches this node to TRNG until power
-            // cycle, and since the master now aborts any camera session whose
-            // slave reports 'T', every later session would abort on arrival.
-            if (camera_is_ready()) {
-                g_src = SRC_CAM;
-                g_src_fell_back  = false;
-                g_fallback_logged = false;
+            if (!camera_is_ready()) {
+                // Say so at the start rather than producing a baseline of zeros:
+                // the master reboots this node and carries on with the rest.
+                link_reply(&from, seq, "E:camera not streaming");
+                TLOG("Baseline refused -- camera not streaming\n");
+                log_camera_stats("NO-CAMERA");
+                continue;
             }
-            // After the camera re-arm above, so the fallback default matches
-            // the source this baseline will actually use.
             int nseg = seg_from_cmd(sarg ? sarg + 1 : NULL);
             g_measuring = true;
             double bsum = 0.0;
             int    done = 0;
-            for (; done < cnt && !g_abort; done++)
-                bsum += gcp_zscore_raw(nseg);
+            for (; done < cnt && !g_abort && !g_cam_fault; done++) {
+                double bz = 0.0;
+                if (!gcp_zscore_raw(nseg, &bz)) break;
+                bsum += bz;
+            }
             g_measuring = false;
-            g_baseline_mean = g_abort ? 0.0 : bsum / cnt;
+            if (g_cam_fault) {
+                // A void run must not be averaged in as a zero -- that would pull
+                // the offset toward 0 and bias every run it is later subtracted
+                // from. Report the fault instead and let the master reboot us.
+                g_baseline_mean = 0.0;
+                link_reply(&from, seq, "E:camera stalled during baseline");
+                TLOG("Baseline ABORTED -- camera stalled after %d/%d runs\n", done, cnt);
+                log_camera_stats("CAMERA-FAULT");
+                continue;
+            }
+            g_baseline_mean = (g_abort || done == 0) ? 0.0 : bsum / done;
             link_reply(&from, seq,"OK");
-            TLOG("Baseline done: mean=%.4f (%d/%d runs, %d seg) source=%s\n",
-                 g_baseline_mean, done, cnt, nseg,
-                 (g_src == SRC_CAM) ? "camera" : "TRNG");
+            TLOG("Baseline done: mean=%.4f (%d/%d runs, %d seg)\n",
+                 g_baseline_mean, done, cnt, nseg);
             log_camera_stats("after-baseline");
 
         } else if (cmd[0] == 'M') {
             g_abort = false;
+            g_cam_fault = false;
             g_measuring = true;
-            double z = gcp_zscore_raw(seg_from_cmd(cmd + 1)) - g_baseline_mean;
+            double zraw = 0.0;
+            bool   ok   = gcp_zscore_raw(seg_from_cmd(cmd + 1), &zraw);
             g_measuring = false;
-            // Reply carries the source this run actually used: 'C' camera,
-            // 'T' TRNG. Appended after the float so atof() still parses it.
-            char resp[40];
-            snprintf(resp, sizeof(resp), "Z:%.6f,%c", z, (g_src == SRC_CAM) ? 'C' : 'T');
-            link_reply(&from, seq,resp);
-            if (g_src_fell_back && !g_fallback_logged) {
-                g_fallback_logged = true;
-                log_camera_stats("FALLBACK->TRNG");
+            char resp[48];
+            if (!ok && g_cam_fault) {
+                // No ",<C|T>" tag any more: with one source, a completed run can
+                // only have come from the camera, and a run that could not
+                // complete says so outright instead of reporting a substitute.
+                snprintf(resp, sizeof(resp), "E:camera stalled mid-run");
+                log_camera_stats("CAMERA-FAULT");
+            } else {
+                snprintf(resp, sizeof(resp), "Z:%.6f", zraw - g_baseline_mean);
             }
+            link_reply(&from, seq, resp);
 
         } else if (cmd[0] == 'D') {
             // Camera diagnostics, so the master can surface slave-side health
-            // instead of only seeing 'C'/'T' on each measurement.
+            // rather than only learning of a problem when a run fails.
             camera_stats_t cs;
             camera_get_stats(&cs);
             char r[128];
-            snprintf(r, sizeof(r), "D:%d,%.6f,%.4f,%.3f,%lu,%lu,%c",
+            snprintf(r, sizeof(r), "D:%d,%.6f,%.4f,%.3f,%lu,%lu",
                      (int)cs.ready, cs.bias, cs.sigma, cs.mbit_per_sec,
-                     (unsigned long)cs.stalls, (unsigned long)cs.stuck_frame_count,
-                     (g_src == SRC_CAM) ? 'C' : 'T');
+                     (unsigned long)cs.stalls, (unsigned long)cs.stuck_frame_count);
             link_reply(&from, seq, r);
             log_camera_stats("on-demand");
 
         } else if (cmd[0] == 'A') {
             g_abort = true;
             link_reply(&from, seq, "OK");
+
+        } else if (cmd[0] == 'R') {
+            /* Reboot, ordered by the master after this node reported a camera
+             * fault. There is no substitute source to limp along on, so a node
+             * that cannot see photons is not an instrument — restarting is the
+             * one recovery software has, since the camera is brought up in
+             * app_main. Answer FIRST so the master's socket does not sit on a
+             * reply that the restart would eat, then give the datagram a moment
+             * to leave the stack.
+             *
+             * Safe by construction: the running image is already marked valid,
+             * so this comes back on the same firmware and rejoins the next
+             * session through discovery. */
+            TLOG("REBOOT ordered by master (camera fault)\n");
+            log_camera_stats("before-reboot");
+            link_reply(&from, seq, "OK");
+            vTaskDelay(pdMS_TO_TICKS(200));
+            esp_restart();
 
         } else {
             TLOG("Unknown command: '%c' (0x%02X)\n", cmd[0], (uint8_t)cmd[0]);
@@ -535,8 +565,10 @@ void app_main(void)
     ethernet_init();
 
     // Camera entropy (this node's own OV5647 — never shared with the master).
-    // Non-fatal: without it the slave still measures on its TRNG, which is the
-    // pre-camera behaviour, and reports 'T' so the master can flag the mix.
+    // There is no second source: if this fails the node cannot measure at all
+    // and will answer "E:" to every command until a reboot fixes it. It still
+    // comes up on the network, deliberately — a node that cannot be reached
+    // cannot be diagnosed, rebooted or reflashed.
     esp_err_t cam_ret = camera_init();
     if (cam_ret == ESP_OK) {
         s_cal = heap_caps_calloc(1, sizeof(camera_cal_t), MALLOC_CAP_SPIRAM);
@@ -545,9 +577,9 @@ void app_main(void)
         // master's first M command arrives.
         for (int i = 0; i < 100 && !camera_is_ready(); i++) vTaskDelay(pdMS_TO_TICKS(50));
     } else {
-        ESP_LOGW(TAG, "camera_init: %s -- measuring on TRNG", esp_err_to_name(cam_ret));
+        ESP_LOGE(TAG, "camera_init: %s -- THIS NODE CANNOT MEASURE",
+                 esp_err_to_name(cam_ret));
     }
-    g_src = camera_is_ready() ? SRC_CAM : SRC_TRNG;
 
     EventBits_t bits = xEventGroupWaitBits(s_eth_events, ETH_GOT_IP_BIT,
                                            pdFALSE, pdTRUE, pdMS_TO_TICKS(30000));
@@ -563,7 +595,7 @@ void app_main(void)
     elotto_ota_register(srv, slave_busy);
     elotto_ota_mark_valid();
 
-    if (g_src == SRC_CAM) {
+    if (camera_is_ready()) {
         vTaskDelay(pdMS_TO_TICKS(3000));   // let stats accumulate before reporting
         log_camera_stats("idle-boot");     // light-leak baseline, no measurement load
     }
