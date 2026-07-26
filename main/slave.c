@@ -30,6 +30,7 @@
 #include "esp_event.h"
 #include "esp_http_server.h"
 #include "esp_timer.h"
+#include "esp_heap_caps.h"
 #include "nvs_flash.h"
 #include "lwip/sockets.h"
 #include "lwip/inet.h"
@@ -68,6 +69,12 @@ static const char *TAG = "slave";
 typedef enum { SRC_TRNG = 0, SRC_CAM = 1 } SlaveSource;
 static volatile SlaveSource g_src = SRC_TRNG;
 static volatile bool        g_src_fell_back = false;
+
+/* The calibration sweep's table (~1.2 KB). PSRAM and allocated once: the camera
+ * already makes PSRAM mandatory, and a struct this size does not belong on the
+ * link task's stack. NULL means the allocation failed, which the 'K' handler
+ * reports rather than papering over. */
+static camera_cal_t *s_cal;
 
 static double        g_baseline_mean = 0.0;
 static volatile bool g_abort         = false;
@@ -334,14 +341,26 @@ static httpd_handle_t start_webserver(void)
  * Protocol, unchanged from the UART era; only the framing around it is new
  * (see components/elotto_link/include/elotto_link.h):
  *   P        → OK                  (discovery, was the wired ping)
+ *   K<ms>    → OK:exp,gain,fold,bias,mbit_s,<G|U>   (calibrate the camera)
  *   B<n>,<s> → OK                  (baseline, n runs of s segments each)
  *   M<s>     → Z:<float>,<C|T>     (measure s segments; C = camera, T = TRNG)
  *   D        → D:ready,bias,sigma,mbit_s,stalls,stuck,<C|T>
  *   A        → OK                  (abort)
  *
- * The segment counts on 'B'/'M' are the Phase 5 addition; everything else is
- * unchanged from the UART era.
+ * The segment counts on 'B'/'M' are the Phase 5 addition; 'K' is Task 1 of
+ * docs/PLAN.md. Everything else is unchanged from the UART era.
  */
+
+/* Abort poll for the calibration sweep. The sweep blocks this task for tens of
+ * seconds, and it is the ONLY reader of the socket — without pumping it here an
+ * 'A' would sit unread until the sweep finished, which is exactly the case the
+ * abort exists for. Same peek-and-consume-only-'A' rule as inside a run, so the
+ * master's resend of the 'K' being executed stays queued for the reply cache. */
+static bool cal_abort_cb(void)
+{
+    link_poll_abort();
+    return g_abort;
+}
 static void link_task(void *arg)
 {
     // This task IS the entropy consumer. The camera extraction task is
@@ -384,6 +403,50 @@ static void link_task(void *arg)
         if (cmd[0] == 'P') {
             link_reply(&from, seq, "OK");
             TLOG("discovery from %s -> OK\n", inet_ntoa(from.sin_addr));
+
+        } else if (cmd[0] == 'K') {
+            /* Camera calibration (docs/PLAN.md Task 1). The sweep itself lives
+             * in the shared elotto_camera component, so this node and the master
+             * run byte-identical logic and cannot disagree about what a
+             * calibrated camera is — the same reason the extraction pipeline is
+             * shared rather than duplicated.
+             *
+             * This node picks its OWN setting and will not match the master's.
+             * That is correct: the cameras are physically different units, which
+             * is precisely why one measured cleaner than the other at identical
+             * settings. What must still be shared is the segment count per run,
+             * and that travels on the wire. */
+            int budget = atoi(cmd + 1);
+            if (budget < 2000)   budget = 2000;
+            if (budget > 120000) budget = 120000;
+            g_abort = false;
+            link_drain();       // a stale 'A' must not abort the sweep it precedes
+
+            char r[96];
+            if (!camera_is_ready() || !s_cal) {
+                // Nothing to tune. Answered rather than ignored: silence here
+                // would be counted as a missed reply and walk this node toward
+                // being dropped for a reason that has nothing to do with it.
+                snprintf(r, sizeof(r), "OK:0,0,0,0.500000,0.000,U");
+                TLOG("cal: no camera (%s) -- nothing to calibrate\n",
+                     s_cal ? "not streaming" : "no PSRAM for the table");
+            } else {
+                g_measuring = true;    // also refuses OTA while the sensor is
+                                       // being reconfigured
+                bool ok = camera_calibrate(budget, cal_abort_cb, s_cal);
+                g_measuring = false;
+                snprintf(r, sizeof(r), "OK:%lu,%lu,%d,%.6f,%.3f,%c",
+                         (unsigned long)s_cal->exposure, (unsigned long)s_cal->gain,
+                         s_cal->xor_fold ? 1 : 0, s_cal->bias, s_cal->mbit_per_sec,
+                         ok ? 'G' : 'U');
+                TLOG("cal done: exposure=%lu gain=%lu fold=%d %s (%lu ms, %d steps)\n",
+                     (unsigned long)s_cal->exposure, (unsigned long)s_cal->gain,
+                     s_cal->xor_fold ? 1 : 0,
+                     ok ? "gated" : "NO gated setting -- kept previous",
+                     (unsigned long)s_cal->elapsed_ms, s_cal->nsteps);
+                log_camera_stats("after-calibration");
+            }
+            link_reply(&from, seq, r);
 
         } else if (cmd[0] == 'B') {
             int cnt = atoi(cmd + 1);
@@ -476,6 +539,8 @@ void app_main(void)
     // pre-camera behaviour, and reports 'T' so the master can flag the mix.
     esp_err_t cam_ret = camera_init();
     if (cam_ret == ESP_OK) {
+        s_cal = heap_caps_calloc(1, sizeof(camera_cal_t), MALLOC_CAP_SPIRAM);
+        if (!s_cal) ESP_LOGE(TAG, "no PSRAM for the calibration table");
         // Wait briefly for the first frame pair so the ring has bits before the
         // master's first M command arrives.
         for (int i = 0; i < 100 && !camera_is_ready(); i++) vTaskDelay(pdMS_TO_TICKS(50));
