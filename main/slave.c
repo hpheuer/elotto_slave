@@ -12,10 +12,16 @@
  * all. That is exactly why the slave has been running the recovery updater
  * since Phase A.
  *
- * The measurement code below — noise_word(), gcp_zscore_raw(), the segment
- * counts, the 'C'/'T' source tag — is untouched, deliberately: Phase C is an
- * A/B of the transport, so anything that could move pair_r or sigma must stay
- * byte-identical to the UART era.
+ * The measurement code was held byte-identical to the UART era through Phase C,
+ * deliberately: that phase was an A/B of the transport, so nothing that could
+ * move pair_r or sigma was allowed to change with it.
+ *
+ * It has since MOVED rather than changed. gcp_zscore_raw() and noise_word()
+ * now live in elotto/components/elotto_gcp, compiled into this firmware and the
+ * master's from one definition, so the two cannot disagree about how a z is
+ * computed — the combine assumes they agree. The arithmetic that crossed Phase C
+ * unchanged is unchanged still, down to the normalisation constant; only the
+ * abort poll is local, passed in as gcp_yield_cb().
  */
 #include <math.h>
 #include <stdio.h>
@@ -36,6 +42,7 @@
 #include "lwip/sockets.h"
 #include "lwip/inet.h"
 #include "camera.h"
+#include "gcp.h"
 #include "elotto_link.h"
 #include "elotto_ota.h"
 
@@ -212,15 +219,6 @@ static void link_drain(void)
 
 /* ── Measurement (unchanged from the UART era — see file header) ──────── */
 
-// Mirrors the master's noise_word(). There is no fallback to mirror any more:
-// a failed read means the run is void, and bits are never invented to cover it.
-static inline bool noise_word(uint32_t *w)
-{
-    if (camera_read_word(w)) return true;
-    g_cam_fault = true;
-    return false;
-}
-
 /* Segment count for this run: what the master asked for, or this node's own
  * default if the command carried none. `arg` points just past the command
  * letter (and past the ',' for 'B'). */
@@ -233,36 +231,27 @@ static int seg_from_cmd(const char *arg)
     return CAM_SEGMENTS;
 }
 
-/* One run. Returns false if it produced no usable z — either the master aborted
- * it, or the camera stopped delivering (g_cam_fault, which the caller turns into
- * an "E:" reply). A short run is not a small run: its z would be normalised by
- * a √segments it never reached, so a void run yields nothing at all. */
-static bool gcp_zscore_raw(int nseg, double *out)
+/* Called at each of the ~4 yields per run: pick up an abort the master may have
+ * sent mid-run. Returning false abandons the run. */
+static bool gcp_yield_cb(void)
 {
-    // Abort latency, not pacing: keep the yield cadence a fixed fraction of the
-    // run so it stays matched to the master's at every run length.
-    const int poll = nseg / 4 + 1;
+    link_poll_abort();
+    return !g_abort;
+}
 
-    double z_sum = 0.0;
-    for (int seg = 0; seg < nseg; seg++) {
-        uint32_t w;
-        int ones = 0;
-        for (int i = 0; i < 6; i++) {
-            if (!noise_word(&w)) return false;
-            ones += __builtin_popcount(w);
-        }
-        if (!noise_word(&w)) return false;
-        ones += __builtin_popcount(w & 0xFF);   // 200 bits = SEGMENT_BITS
-
-        z_sum += (ones - 100.0) / 7.07106781;
-        if (seg % poll == 0) {   // 4 yields/run, matching the master's cadence
-            vTaskDelay(1);
-            link_poll_abort();
-            if (g_abort) return false;
-        }
-    }
-    *out = z_sum / sqrt((double)nseg);
-    return true;
+/* One run, via the shared primitive in elotto/components/elotto_gcp — the same
+ * object code the master runs, so this node cannot compute z differently from
+ * the one it will be combined with.
+ *
+ * Returns false if the run produced no usable z, and sets g_cam_fault when the
+ * reason was the camera rather than an abort (the caller turns that into an
+ * "E:" reply). A short run is not a small run: its z would be normalised by a
+ * √segments it never reached, so a void run yields nothing at all. */
+static bool gcp_zscore_ok(int nseg, double *out)
+{
+    gcp_result_t r = gcp_zscore_raw(nseg, gcp_yield_cb, out);
+    if (r == GCP_CAM_FAULT) g_cam_fault = true;
+    return r == GCP_OK;
 }
 
 /* ── HTTP: own /diag, plus the shared update endpoints ────────────────── */
@@ -468,7 +457,7 @@ static void link_task(void *arg)
             int    done = 0;
             for (; done < cnt && !g_abort && !g_cam_fault; done++) {
                 double bz = 0.0;
-                if (!gcp_zscore_raw(nseg, &bz)) break;
+                if (!gcp_zscore_ok(nseg, &bz)) break;
                 bsum += bz;
             }
             g_measuring = false;
@@ -493,7 +482,7 @@ static void link_task(void *arg)
             g_cam_fault = false;
             g_measuring = true;
             double zraw = 0.0;
-            bool   ok   = gcp_zscore_raw(seg_from_cmd(cmd + 1), &zraw);
+            bool   ok   = gcp_zscore_ok(seg_from_cmd(cmd + 1), &zraw);
             g_measuring = false;
             char resp[48];
             if (!ok && g_cam_fault) {
