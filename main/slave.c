@@ -305,6 +305,21 @@ static esp_err_t root_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* GET /calibrate — this node's whole last exposure sweep, per candidate.
+ *
+ * The sweep already ran and already sat in PSRAM; until now nothing could read
+ * it. Only the CHOSEN rung travels on the wire (`OK:<exp>,...`), by design, so
+ * the master cannot answer "is this node's sensor worse, or is it just darker?"
+ * — that needs the whole ladder from the node itself. Same payload shape as the
+ * master's /calibrate, because the serialiser is shared.
+ *
+ * Empty until a 'K' has been answered: a node that has never calibrated has no
+ * sweep to report, and says so rather than inventing one. */
+static esp_err_t calibrate_handler(httpd_req_t *req)
+{
+    return camera_cal_send_json(req, s_cal);
+}
+
 static httpd_handle_t start_webserver(void)
 {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
@@ -318,8 +333,10 @@ static httpd_handle_t start_webserver(void)
     ESP_ERROR_CHECK(httpd_start(&srv, &cfg));
     static const httpd_uri_t root = {"/",     HTTP_GET, root_handler, NULL};
     static const httpd_uri_t diag = {"/diag", HTTP_GET, diag_handler, NULL};
+    static const httpd_uri_t cal  = {"/calibrate", HTTP_GET, calibrate_handler, NULL};
     httpd_register_uri_handler(srv, &root);
     httpd_register_uri_handler(srv, &diag);
+    httpd_register_uri_handler(srv, &cal);
     return srv;
 }
 
