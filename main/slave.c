@@ -262,7 +262,9 @@ static esp_err_t diag_handler(httpd_req_t *req)
 {
     camera_stats_t cs;
     camera_get_stats(&cs);
-    char buf[768];
+    uint32_t exp_now = 0, gain_now = 0;
+    camera_get_exposure(&exp_now, &gain_now);
+    char buf[1024];
     int  pos = snprintf(buf, sizeof(buf),
         "{\"role\":\"slave\",\"src\":\"camera-only\",\"cam_fault\":%s,"
         "\"measuring\":%s,\"baseline_mean\":%.4f,",
@@ -273,11 +275,18 @@ static esp_err_t diag_handler(httpd_req_t *req)
         ",\"cam\":{\"ready\":%s,\"frame_pairs\":%llu,\"bias\":%.6f,\"sigma\":%.4f,"
         "\"mean_pixel\":%.2f,\"mbit_s\":%.3f,\"zero_diff\":%.4f,\"stuck_frames\":%lu,"
         "\"drops\":%lu,\"waits\":%lu,\"stalls\":%lu,"
+        /* exposure/gain are the parameters actually being tuned, so a
+         * diagnostics view without them cannot answer "what is this node
+         * running on right now?" -- the master reported them all along and the
+         * slaves did not. */
+        "\"exposure\":%lu,\"gain\":%lu,\"fold\":%s,"
         "\"autocorr\":[%.4f,%.4f,%.4f,%.4f]}}",
         cs.ready ? "true" : "false", (unsigned long long)cs.frame_pairs,
         cs.bias, cs.sigma, cs.mean_pixel_level, cs.mbit_per_sec, cs.zero_diff_frac,
         (unsigned long)cs.stuck_frame_count, (unsigned long)cs.ring_drops,
         (unsigned long)cs.consumer_waits, (unsigned long)cs.stalls,
+        (unsigned long)exp_now, (unsigned long)gain_now,
+        camera_get_xor_fold() ? "true" : "false",
         cs.autocorr_lag[0], cs.autocorr_lag[1], cs.autocorr_lag[2], cs.autocorr_lag[3]);
 
     httpd_resp_set_type(req, "application/json");
