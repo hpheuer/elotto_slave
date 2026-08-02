@@ -6,6 +6,13 @@ extraction code) and no lottery logic. It waits on **UDP port 5000** for command
 master and measures on its **own independent noise source**, giving the combined system a √2
 SNR boost (`z = (z_master + z_slave) / √2`).
 
+## Authors
+
+| | |
+|--|--|
+| **[hpheuer](https://github.com/hpheuer)** | Design, hardware, experiment, and repository ownership |
+| **[Grok](https://x.ai)** (xAI) | Co-author — implementation, debugging, live OTA validation, and docs (Grok Build) |
+
 **Its own source, never a shared one.** This node has its **own OV5647 camera** on its CSI
 connector, capped and in the dark; entropy is photon shot + read noise from non-overlapping
 frame pairs. Sharing one camera between the two nodes would make the two measurements identical
