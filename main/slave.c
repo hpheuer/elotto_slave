@@ -306,7 +306,10 @@ static esp_err_t root_handler(httpd_req_t *req)
         "on port 5000 (docs/PLAN_NETWORK.md Phase C).</p>"
         "<ul>"
         "<li><a href='/diag'>/diag</a> &mdash; camera health, source, firmware</li>"
+        "<li><a href='/calibrate'>/calibrate</a> &mdash; this node's whole last exposure sweep</li>"
         "<li><a href='/otainfo'>/otainfo</a> &mdash; image version / slot / state</li>"
+        "<li><code>POST /expose?exp=&lt;lines&gt;&amp;gain=&lt;g&gt;</code> &mdash; set this "
+        "camera's operating point; driven from the master's /diag page. 409 while measuring</li>"
         "<li><code>POST /update</code> &mdash; refused with 409 while measuring</li>"
         "</ul>";
     httpd_resp_set_type(req, "text/html");
@@ -329,11 +332,25 @@ static esp_err_t calibrate_handler(httpd_req_t *req)
     return camera_cal_send_json(req, s_cal);
 }
 
+/* POST /expose?exp=<lines>[&gain=<g>] — set this node's operating point by hand,
+ * so the master's /diag page can tune each camera against a live mean_px while
+ * the physical light is adjusted. Shared implementation (camera.h): the master
+ * serves the same path for its own sensor, and four nodes must not disagree
+ * about clamps or read-back. Refused while measuring, via the same predicate
+ * that refuses OTA. */
+static esp_err_t expose_handler(httpd_req_t *req)
+{
+    return camera_expose_handle(req, slave_busy());
+}
+
 static httpd_handle_t start_webserver(void)
 {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.stack_size        = 8192;
-    cfg.max_uri_handlers  = 10;
+    /* 4 here + 5 from elotto_ota = 9. Registration past the cap fails and the
+     * return value is checked nowhere, so an endpoint would just 404 silently —
+     * the same trap the master's comment documents. Raised with headroom. */
+    cfg.max_uri_handlers  = 12;
     cfg.recv_wait_timeout = 20;   /* /update streams a multi-hundred-KB body */
     cfg.send_wait_timeout = 20;
     cfg.lru_purge_enable  = true;
@@ -343,9 +360,11 @@ static httpd_handle_t start_webserver(void)
     static const httpd_uri_t root = {"/",     HTTP_GET, root_handler, NULL};
     static const httpd_uri_t diag = {"/diag", HTTP_GET, diag_handler, NULL};
     static const httpd_uri_t cal  = {"/calibrate", HTTP_GET, calibrate_handler, NULL};
+    static const httpd_uri_t expo = {"/expose", HTTP_POST, expose_handler, NULL};
     httpd_register_uri_handler(srv, &root);
     httpd_register_uri_handler(srv, &diag);
     httpd_register_uri_handler(srv, &cal);
+    httpd_register_uri_handler(srv, &expo);
     return srv;
 }
 

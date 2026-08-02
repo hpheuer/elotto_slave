@@ -2,7 +2,8 @@
 # ESP-IDF environment for all three projects.
 #
 #   .\build.ps1 build
-#   .\build.ps1 -p COM6 flash
+#
+# Firmware is delivered over OTA; do not flash over serial from this script.
 #
 # WHY IT ONLY FORWARDS: this script used to set the environment itself, and it
 # pointed at export.ps1's interpreter (C:\Espressif\tools\python_env\
