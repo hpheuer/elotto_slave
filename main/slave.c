@@ -61,8 +61,9 @@ static const char *TAG = "slave";
 // i.e. a pre-Phase-5 image. A fallback is not a second source of truth: if it
 // is ever used the console says so.
 #define CAM_SEGMENTS  8000           // 1.6 Mbit/run ≈ 0.47 s at ~3.4 Mbit/s
-#define SEG_MIN        100
-#define SEG_MAX     200000
+/* One definition, in the wire header both firmwares compile (elotto_link.h). */
+#define SEG_MIN     EL_SEG_MIN
+#define SEG_MAX     EL_SEG_MAX
 
 /* ENTROPY IS PHOTONS, AND ONLY PHOTONS (user decision, 2026-07-26).
  *

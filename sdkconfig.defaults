@@ -57,3 +57,20 @@ CONFIG_ESP_VIDEO_ENABLE_DVP_VIDEO_DEVICE=n
 # --- HTTP server (Phase C: the slave is now OTA-updatable like every node) ---
 CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
 CONFIG_HTTPD_MAX_URI_LEN=512
+
+# --- Compiler ---------------------------------------------------------------
+# -O2, not the IDF default -Og. MEASURED 2026-08-18, idle /diag, all four nodes
+# before and after:
+#
+#   master 3,422 -> 3,809 Mbit/s (x1,11)   slaves 3,301/3,303 -> 3,811 (x1,15)
+#   52,6 -> 47,3 CPU cycles per pixel
+#
+# ⚠ Keep it, but do NOT expect much: the hypothesis was that -Og codegen was the
+# reason a per-pixel XOR costs ~53 cycles, and it is worth only ~14 %. The other
+# ~47 cycles are elsewhere (the per-pixel `volatile s_xor_fold` load, the
+# non-inlined process_word call spilling the packer state, the 4 diagnostic
+# popcounts per word). The binary also got SMALLER, 0xbe2c0 -> 0xb8820.
+# Source quality unchanged, as it must be: bias 0,4999, sigma 1,000, autocorr ~0,
+# 0 stuck frames, 0 stalls.
+# Assertions stay ENABLED: they are a correctness net, not a speed knob.
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
