@@ -520,7 +520,7 @@ static void link_task(void *arg)
             int nseg = seg_from_cmd(sarg ? sarg + 1 : NULL);
             g_measuring = true;
             double bsum = 0.0;
-            int    done = 0;
+            int    done = 0, contrib = 0;   /* contrib: runs that produced a z */
             for (; done < cnt && !g_abort && !g_cam_fault; done++) {
                 /* The baseline flushes like every other run: it is the drift
                  * reference the master cross-checks against the block's own
@@ -531,6 +531,7 @@ static void link_task(void *arg)
                 double bz = 0.0;
                 if (!gcp_zscore_ok(nseg, &bz)) break;
                 bsum += bz;
+                contrib++;
             }
             g_measuring = false;
             if (g_cam_fault) {
@@ -543,10 +544,14 @@ static void link_task(void *arg)
                 log_camera_stats("CAMERA-FAULT");
                 continue;
             }
-            g_baseline_mean = (g_abort || done == 0) ? 0.0 : bsum / done;
+            /* ⚠ Divide by the runs that CONTRIBUTED, not by the loop counter.
+             * A flush-timeout run is skipped, and dividing by `done` would have
+             * averaged it in as a zero -- pulling the reference toward 0, which
+             * is exactly what the comment above this loop already forbids. */
+            g_baseline_mean = (g_abort || contrib == 0) ? 0.0 : bsum / contrib;
             link_reply(&from, seq,"OK");
-            TLOG("Baseline done: mean=%.4f (%d/%d runs, %d seg)\n",
-                 g_baseline_mean, done, cnt, nseg);
+            TLOG("Baseline done: mean=%.4f (%d contributing of %d/%d runs, %d seg)\n",
+                 g_baseline_mean, contrib, done, cnt, nseg);
             log_camera_stats("after-baseline");
 
         } else if (cmd[0] == 'M') {
@@ -568,7 +573,7 @@ static void link_task(void *arg)
                  * the flush exists to remove. The master drops this node for
                  * this run and combines over √(k−1); one arm short of one run
                  * costs far less than a run of unknown provenance. */
-                link_reply(&from, seq, "E:ring flush timeout");
+                link_reply(&from, seq, "V:ring flush timeout");
                 TLOG("Run REFUSED -- ring flush did not settle in %d ms\n",
                      SLAVE_FLUSH_MS);
                 continue;
