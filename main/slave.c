@@ -262,6 +262,19 @@ static bool gcp_zscore_ok(int nseg, double *out)
 
 static bool slave_busy(void) { return g_measuring; }
 
+/* Drop the pre-window bits and wait for a fresh pair. false = did not settle,
+ * in which case the RING WAS NOT DROPPED (the flush happens at a pair boundary)
+ * and the caller must refuse rather than measure. */
+#define SLAVE_FLUSH_MS  500
+static bool ring_flush_ok(void)
+{
+    camera_ring_flush(1);
+    int64_t limit = esp_timer_get_time() + SLAVE_FLUSH_MS * 1000LL;
+    while (!camera_ring_flushed() && esp_timer_get_time() < limit)
+        vTaskDelay(1);
+    return camera_ring_flushed();
+}
+
 static esp_err_t diag_handler(httpd_req_t *req)
 {
     camera_stats_t cs;
@@ -509,6 +522,12 @@ static void link_task(void *arg)
             double bsum = 0.0;
             int    done = 0;
             for (; done < cnt && !g_abort && !g_cam_fault; done++) {
+                /* The baseline flushes like every other run: it is the drift
+                 * reference the master cross-checks against the block's own
+                 * mean, and two estimates of one offset must draw on bits of
+                 * the same provenance. A run whose flush times out is skipped,
+                 * not averaged in. */
+                if (!ring_flush_ok()) { TLOG("Baseline run skipped -- flush timeout\n"); continue; }
                 double bz = 0.0;
                 if (!gcp_zscore_ok(nseg, &bz)) break;
                 bsum += bz;
@@ -541,10 +560,20 @@ static void link_task(void *arg)
              * and the slaves did not, so three of four arms carried pre-window
              * bits into every measurement. Statistics are untouched — this is
              * camera_ring_flush(), not camera_stats_reset(). */
-            camera_ring_flush(1);
-            int64_t flush_limit = esp_timer_get_time() + 500000LL;
-            while (!camera_ring_flushed() && esp_timer_get_time() < flush_limit)
-                vTaskDelay(1);
+            g_measuring = false;
+            if (!ring_flush_ok()) {
+                /* ⚠ Answer with a refusal, never with a z. A timed-out flush
+                 * never reached a pair boundary, so the ring was not even
+                 * dropped and the run would consume precisely the stale bits
+                 * the flush exists to remove. The master drops this node for
+                 * this run and combines over √(k−1); one arm short of one run
+                 * costs far less than a run of unknown provenance. */
+                link_reply(&from, seq, "E:ring flush timeout");
+                TLOG("Run REFUSED -- ring flush did not settle in %d ms\n",
+                     SLAVE_FLUSH_MS);
+                continue;
+            }
+            g_measuring = true;
             double zraw = 0.0;
             bool   ok   = gcp_zscore_ok(seg_from_cmd(cmd + 1), &zraw);
             g_measuring = false;
