@@ -38,6 +38,7 @@
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
 #include "esp_system.h"
+#include "esp_app_desc.h"   /* this node's image identity, for the 'D' reply */
 #include "nvs_flash.h"
 #include "lwip/sockets.h"
 #include "lwip/inet.h"
@@ -470,9 +471,28 @@ static void link_task(void *arg)
              * is precisely why one measured cleaner than the other at identical
              * settings. What must still be shared is the segment count per run,
              * and that travels on the wire. */
+            /* "K<budget_ms>[,<segments>]". The segment count scales the bias
+             * gate (camera_cal_set_z_scale): the same bias is a 1,5-z offset at
+             * 26087 segments and a 3,3-z one at 130435, so a node that guessed
+             * would apply a different bar to its own camera than its peers do.
+             * A master too old to send it leaves the legacy fixed bar in force,
+             * which is logged loudly here — tolerable ONLY because this decides
+             * an exposure rung and never enters a combine, unlike the segment
+             * count on 'B'/'M'. */
             int budget = atoi(cmd + 1);
             if (budget < 2000)   budget = 2000;
             if (budget > 120000) budget = 120000;
+            const char *segp = strchr(cmd + 1, ',');
+            int cal_segs = segp ? atoi(segp + 1) : 0;
+            if (cal_segs < EL_SEG_MIN || cal_segs > EL_SEG_MAX) {
+                if (cal_segs != 0)
+                    TLOG("cal: segment count %d out of [%d,%d] -- legacy bias bar\n",
+                         cal_segs, EL_SEG_MIN, EL_SEG_MAX);
+                else
+                    TLOG("cal: no segment count on 'K' (old master) -- legacy bias bar\n");
+                cal_segs = 0;
+            }
+            camera_cal_set_z_scale(gcp_z_per_bias(cal_segs));
             g_abort = false;
             link_drain();       // a stale 'A' must not abort the sweep it precedes
 
@@ -599,10 +619,21 @@ static void link_task(void *arg)
             // rather than only learning of a problem when a run fails.
             camera_stats_t cs;
             camera_get_stats(&cs);
+            /* ...plus this node's own image, tagged rather than positional so
+             * the master's field-order parse cannot trip over it and an older
+             * master simply never looks. It ends up in the session CSV header:
+             * "all four nodes run the same code" is a policy, and on 2026-08-19
+             * it was not true (master built 10:57 -dirty, slaves 09:59) while
+             * the archive of that session recorded neither. */
+            const esp_app_desc_t *desc = esp_app_get_description();
+            char sha[17] = {0};
+            for (int i = 0; i < 8; i++)
+                snprintf(sha + i * 2, 3, "%02x", desc->app_elf_sha256[i]);
             char r[128];
-            snprintf(r, sizeof(r), "D:%d,%.6f,%.4f,%.3f,%lu,%lu",
+            snprintf(r, sizeof(r), "D:%d,%.6f,%.4f,%.3f,%lu,%lu,fw=%s",
                      (int)cs.ready, cs.bias, cs.sigma, cs.mbit_per_sec,
-                     (unsigned long)cs.stalls, (unsigned long)cs.stuck_frame_count);
+                     (unsigned long)cs.stalls, (unsigned long)cs.stuck_frame_count,
+                     sha);
             link_reply(&from, seq, r);
             log_camera_stats("on-demand");
 
