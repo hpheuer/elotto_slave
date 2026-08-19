@@ -60,7 +60,10 @@ static const char *TAG = "slave";
 // CAM_SEGMENTS remains only as the fallback for a master that sends no count —
 // i.e. a pre-Phase-5 image. A fallback is not a second source of truth: if it
 // is ever used the console says so.
-#define CAM_SEGMENTS  8000           // 1.6 Mbit/run ≈ 0.47 s at ~3.4 Mbit/s
+// 1.6 Mbit/run: ~0,47 s at the ~3,4 Mbit/s this was written for, ~0,28 s at the
+// 5,71 Mbit/s the node reaches since 2026-08-18. Only the bit count is a
+// contract; the duration is informational and moves with the extraction rate.
+#define CAM_SEGMENTS  8000
 /* One definition, in the wire header both firmwares compile (elotto_link.h). */
 #define SEG_MIN     EL_SEG_MIN
 #define SEG_MAX     EL_SEG_MAX
@@ -531,6 +534,17 @@ static void link_task(void *arg)
             g_abort = false;
             g_cam_fault = false;
             g_measuring = true;
+            /* Same per-item ring flush the master does (2026-08-19). Nothing
+             * consumes the ring between runs, so it is FULL when a window opens
+             * and the first ~524288 bits of the run were captured before the
+             * item existed. The master settled its own ring long before this
+             * and the slaves did not, so three of four arms carried pre-window
+             * bits into every measurement. Statistics are untouched — this is
+             * camera_ring_flush(), not camera_stats_reset(). */
+            camera_ring_flush(1);
+            int64_t flush_limit = esp_timer_get_time() + 500000LL;
+            while (!camera_ring_flushed() && esp_timer_get_time() < flush_limit)
+                vTaskDelay(1);
             double zraw = 0.0;
             bool   ok   = gcp_zscore_ok(seg_from_cmd(cmd + 1), &zraw);
             g_measuring = false;
