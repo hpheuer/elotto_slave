@@ -1,10 +1,17 @@
 # E-Lotto Slave — GCP Measurement Node (ESP32-P4)
 
-Slave firmware for the [E-Lotto GCP project](https://github.com/hpheuer/elotto). A second
-ESP32-P4 that runs the **identical GCP engine** as the master (same Z-score math, same
-extraction code) and no lottery logic. It waits on **UDP port 5000** for commands from the
-master and measures on its **own independent noise source**, giving the combined system a √2
-SNR boost (`z = (z_master + z_slave) / √2`).
+Worker firmware for the [E-Lotto GCP project](https://github.com/hpheuer/elotto). An ESP32-P4
+that runs the **identical GCP engine** as the master (same Z-score math, same extraction code) and
+no lottery logic. It waits on **UDP port 5000** for commands from the master and measures on its
+**own independent noise source**.
+
+The array is up to **four nodes** — one master plus three of these — found by broadcast at every
+session start, so there is no node count configured anywhere. The master combines
+**`z = Σ z_i / √k`** over the *k* nodes that answered **that run**, so a node missing one reply
+costs that run's gain rather than the session.
+
+⚠ The √k gain assumes the nodes are independent, and that is **not established**. Judge a session
+on per-block combined σ and the full pairwise matrix, never on one correlation figure.
 
 ## Authors
 
@@ -14,9 +21,13 @@ SNR boost (`z = (z_master + z_slave) / √2`).
 | **[Grok](https://x.ai)** (xAI) | Co-author — implementation, debugging, live OTA validation, and docs (Grok Build) |
 
 **Its own source, never a shared one.** This node has its **own OV5647 camera** on its CSI
-connector, capped and in the dark; entropy is photon shot + read noise from non-overlapping
-frame pairs. Sharing one camera between the two nodes would make the two measurements identical
-by construction and the √2 gain fictional.
+connector; entropy is photon shot + read noise from non-overlapping frame pairs. Sharing one
+camera across nodes would make their measurements identical by construction and the √k gain
+fictional.
+
+⚠ **The enclosure is LIT, not dark.** Photons are what does the whitening, and the dark end of the
+exposure ladder is gated off for exactly that reason — on this rig exposures 4 and 8 fail to
+certify while 16…128 pass. If rungs start failing, the answer is more light, not a lower floor.
 
 ⛔ **There is no second source.** The on-chip TRNG is deleted from this firmware and must not come
 back in any form: a whitened hardware RNG would be indistinguishable from the real thing in every
@@ -81,8 +92,8 @@ Any command can answer **`E:<reason>`** instead. That is the whole failure path:
 the node in `fault`, drops it, and sends `R`.
 
 **The segment count travels on the wire**, in `B`, `M` and `K` alike. It is a session parameter
-on the master (derived from `?run=`), not a constant compiled into both firmwares, so the two nodes
-cannot integrate over different lengths. ⚠ A receiver that gets an out-of-range count does not clamp
+on the master (derived from `?run=`), not a constant compiled into both firmwares, so no two
+nodes can integrate over different lengths. ⚠ A receiver that gets an out-of-range count does not clamp
 it — it substitutes its own, which is visible in the reply rather than silently wrong.
 
 **Why the sequence number.** UART was lossless and ordered, so a reply could only belong to the
