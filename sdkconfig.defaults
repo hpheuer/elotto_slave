@@ -24,15 +24,17 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="../elotto/partitions.csv"
 # up Ethernet and a webserver before it marks itself valid (Phase C).
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 
-# --- OV5647 camera entropy (PLAN_4NODE Phase 2) -----------------------------
+# --- OV5647 camera entropy --------------------------------------------------
 # PSRAM is mandatory: the capture buffers (4 x 640 KB) and the extraction ring
 # cannot fit in internal SRAM.
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_HEX=y
 CONFIG_SPIRAM_SPEED_200M=y
 
-# Sensor driver. The mode is load-bearing and must match the master's: every
-# gate in PLAN_4NODE was measured at RAW8 800x800 @ 50 fps.
+# Sensor driver. The MODE is load-bearing and must match the master's: every
+# gate was measured at RAW8 800x800 @ 50 fps.
+# ⚠ The exposure is not fixed here -- this node sweeps its own ladder every
+# block and keeps the rung it certifies, which is not the master's.
 CONFIG_CAMERA_OV5647=y
 CONFIG_CAMERA_OV5647_MIPI_RAW8_800X800_50FPS=y
 CONFIG_CAMERA_OV5647_MIPI_DEFAULT_FMT_RAW8_800X800_50FPS=y
@@ -59,18 +61,16 @@ CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
 CONFIG_HTTPD_MAX_URI_LEN=512
 
 # --- Compiler ---------------------------------------------------------------
-# -O2, not the IDF default -Og. MEASURED 2026-08-18, idle /diag, all four nodes
-# before and after:
+# -O2, not the IDF default -Og. Worth ~14 % on its own when measured in
+# isolation on 2026-08-18 (3,42 -> 3,81 Mbit/s idle, 52,6 -> 47,3 cycles per
+# pixel), and the binary got SMALLER with it.
 #
-#   master 3,422 -> 3,809 Mbit/s (x1,11)   slaves 3,301/3,303 -> 3,811 (x1,15)
-#   52,6 -> 47,3 CPU cycles per pixel
-#
-# ⚠ Keep it, but do NOT expect much: the hypothesis was that -Og codegen was the
-# reason a per-pixel XOR costs ~53 cycles, and it is worth only ~14 %. The other
-# ~47 cycles are elsewhere (the per-pixel `volatile s_xor_fold` load, the
-# non-inlined process_word call spilling the packer state, the 4 diagnostic
-# popcounts per word). The binary also got SMALLER, 0xbe2c0 -> 0xb8820.
-# Source quality unchanged, as it must be: bias 0,4999, sigma 1,000, autocorr ~0,
-# 0 stuck frames, 0 stalls.
+# ⚠ Those figures are a SNAPSHOT of the byte-at-a-time extractor and no longer
+# describe this firmware: the word-wise extractor landed the same day and the
+# idle rate is 5,71 Mbit/s now. The bottlenecks the note used to blame -- a
+# per-pixel `volatile s_xor_fold` load, a non-inlined process_word -- are gone;
+# the fold flag is read once per frame. Do not quote 3,8 as a current number,
+# and re-measure before crediting -O2 with anything on today's code.
+# Source quality is unaffected by the flag, as it must be.
 # Assertions stay ENABLED: they are a correctness net, not a speed knob.
 CONFIG_COMPILER_OPTIMIZATION_PERF=y

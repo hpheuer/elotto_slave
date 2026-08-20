@@ -16,13 +16,17 @@ SNR boost (`z = (z_master + z_slave) / √2`).
 **Its own source, never a shared one.** This node has its **own OV5647 camera** on its CSI
 connector, capped and in the dark; entropy is photon shot + read noise from non-overlapping
 frame pairs. Sharing one camera between the two nodes would make the two measurements identical
-by construction and the √2 gain fictional. The on-chip TRNG (register `0x501101A4`) remains as
-the alternative source.
+by construction and the √2 gain fictional.
+
+⛔ **There is no second source.** The on-chip TRNG is deleted from this firmware and must not come
+back in any form: a whitened hardware RNG would be indistinguishable from the real thing in every
+statistic this project computes. A node whose camera stops delivering answers `E:<reason>` and is
+dropped and rebooted by the master — reporting a fault is the fallback.
 
 Full architecture, protocol timing, camera physics and robustness details: see the master
 repo's **[Dual-ESP: Master & Slave](https://github.com/hpheuer/elotto#dual-esp-master--slave)**
 and **[Camera Entropy](https://github.com/hpheuer/elotto#camera-entropy-ov5647-dark-frame)**
-sections, plus `docs/PLAN_NETWORK.md` for the transport.
+sections, and `CLAUDE.md` there for the rules that bind both repos.
 
 ## Ethernet, not UART (Phase C)
 
@@ -39,9 +43,10 @@ all. That is why this node ran the recovery updater from Phase A until Phase C g
 | endpoint | |
 |---|---|
 | `GET /` | what this node is |
-| `GET /diag` | camera health, active source, firmware identity |
+| `GET /diag` | camera health and firmware identity (same JSON the master serves at `/diagjson`) |
 | `GET /otainfo` | image version / slot / state |
 | `POST /update` | push firmware; **409** while a measurement is running |
+| `POST /expose` | set this node's exposure/gain by hand, for tuning the physical light |
 
 ## ⚠ Three components come from the master repo
 
@@ -65,15 +70,20 @@ Every datagram is one frame: `EL1 <seq> <payload>`. The payload is unchanged fro
 | Command | Reply | Meaning |
 |---|---|---|
 | `P` | `OK` | Discovery (broadcast; replaces the wired ping) |
-| `B<n>` | `OK` after n runs | Baseline calibration, stores own baseline mean; **re-arms the camera** (marks a session start) |
-| `M` | `Z:<float>,<C\|T>` | One measurement, baseline-corrected Z + the source it actually used (**C**amera / **T**RNG) |
-| `D` | `D:<ready>,<bias>,<σ>,<Mbit/s>,<stalls>,<stuck>,<C\|T>` | Camera diagnostics; the master asks once per loop for its `/loops` table |
+| `B<runs>,<seg>` | `OK` after n runs | Baseline calibration, stores own baseline mean; **re-arms the camera** (marks a session start) |
+| `M<seg>` | `Z:<float>` | One measurement, baseline-corrected Z |
+| `K<budget_ms>,<segs>` | `OK:<exp>,<gain>,<fold>,<bias>,<mbit_s>,<G\|U>` | Sweep the exposure ladder and certify a rung |
+| `D` | `D:<ready>,<bias>,<σ>,<Mbit/s>,<stalls>,<stuck>,fw=<sha>` | Camera diagnostics; the master asks once per block for its `/loops` table |
 | `A` | `OK` | Abort (also polled mid-run) |
+| `R` | `OK` | Reboot (the master's answer to a camera fault here) |
 
-The source tag sits **after** the float so `atof()` still parses the number. Reporting `T`
-during a camera session makes the **master abort**: mixing sources mid-session would change the
-physics being measured with no record of which runs were affected. Re-arming on `B` keeps one
-transient stall from latching this node to TRNG until power-cycle.
+Any command can answer **`E:<reason>`** instead. That is the whole failure path: the master names
+the node in `fault`, drops it, and sends `R`.
+
+**The segment count travels on the wire**, in `B`, `M` and `K` alike. It is a session parameter
+on the master (derived from `?run=`), not a constant compiled into both firmwares, so the two nodes
+cannot integrate over different lengths. ⚠ A receiver that gets an out-of-range count does not clamp
+it — it substitutes its own, which is visible in the reply rather than silently wrong.
 
 **Why the sequence number.** UART was lossless and ordered, so a reply could only belong to the
 command just sent. UDP guarantees neither. A late reply, accepted blindly, would pair `z_slave`
@@ -87,8 +97,8 @@ second measurement.
 
 - The wire format lives in `components/elotto_link/` and is compiled into both ends — there is
   nothing to keep in sync by hand, which is the point.
-- `CAM_SEGMENTS` / `TRNG_SEGMENTS` must match the master's, or the two nodes integrate over
-  different run lengths.
+- The segment count arrives with each command, so there is no length to agree on by hand.
+  `EL_SEG_MIN`/`EL_SEG_MAX` are one definition in `components/elotto_link/` for both firmwares.
 - The **yield/abort-poll cadence in `gcp_zscore_raw()`** must match the master's — per-run wall
   time is max(master, slave), so a mismatch slows every measurement to the slower device.
 - **Task priority is load-bearing.** The entropy consumer here is the `link` task, created at
