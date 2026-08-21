@@ -609,6 +609,13 @@ static void link_task(void *arg)
                 // complete says so outright instead of reporting a substitute.
                 snprintf(resp, sizeof(resp), "E:camera stalled mid-run");
                 log_camera_stats("CAMERA-FAULT");
+            } else if (!ok) {
+                /* GCP_ABORTED: the master asked us to stop mid-run (the yield
+                 * poll picked up an 'A'). gcp_zscore_raw() writes *out only on
+                 * GCP_OK, so zraw is unset here — answering "Z:" would send a
+                 * fabricated 0.0 that the master accepts as a real z. Void it:
+                 * no z exists, and this node is not at fault. */
+                snprintf(resp, sizeof(resp), "V:aborted");
             } else {
                 snprintf(resp, sizeof(resp), "Z:%.6f", zraw - g_baseline_mean);
             }
