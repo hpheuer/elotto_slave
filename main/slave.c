@@ -308,12 +308,17 @@ static esp_err_t diag_handler(httpd_req_t *req)
         g_cam_fault ? "true" : "false", g_measuring ? "true" : "false",
         g_baseline_mean);
     pos += elotto_ota_status_json(buf + pos, sizeof(buf) - pos);
+    /* ⚠ JSON has no NaN: "%.2f" of NAN emits the bare token `nan` and makes the
+     * whole document unparseable. null is the encoding for "not reported". */
+    char dt_txt[16];
+    if (isfinite(cs.die_temp_c)) snprintf(dt_txt, sizeof(dt_txt), "%.2f", (double)cs.die_temp_c);
+    else                         snprintf(dt_txt, sizeof(dt_txt), "null");
     snprintf(buf + pos, sizeof(buf) - pos,
         ",\"cam\":{\"ready\":%s,\"frame_pairs\":%llu,\"bias\":%.6f,\"sigma\":%.4f,"
         "\"mean_pixel\":%.2f,\"mbit_s\":%.3f,\"zero_diff\":%.4f,\"stuck_frames\":%lu,"
         /* PRE-FOLD: the stream the sensor produced, before the XOR fold. The
          * fields above describe the folded one. See cam_raw_t in extract.h. */
-        "\"raw_bias\":%.6f,\"raw_sigma\":%.4f,\"raw_sigma_n\":%d,"
+        "\"raw_bias\":%.6f,\"raw_sigma\":%.4f,\"raw_sigma_n\":%d,\"die_temp\":%s,"
         "\"drops\":%lu,\"waits\":%lu,\"stalls\":%lu,"
         /* Per-pair wall-time split, same fields the master publishes: ms_wait
          * is time blocked in DQBUF waiting for the sensor. */
@@ -327,7 +332,7 @@ static esp_err_t diag_handler(httpd_req_t *req)
         cs.ready ? "true" : "false", (unsigned long long)cs.frame_pairs,
         cs.bias, cs.sigma, cs.mean_pixel_level, cs.mbit_per_sec, cs.zero_diff_frac,
         (unsigned long)cs.stuck_frame_count,
-        cs.raw_bias, cs.raw_sigma, cs.raw_sigma_samples,
+        cs.raw_bias, cs.raw_sigma, cs.raw_sigma_samples, dt_txt,
         (unsigned long)cs.ring_drops,
         (unsigned long)cs.consumer_waits, (unsigned long)cs.stalls,
         cs.ms_pair, cs.ms_wait, cs.ms_extract, cs.ms_rest,
@@ -786,11 +791,11 @@ static void link_task(void *arg)
             camera_get_exposure(&dex, &dgn);
             char r[224];
             snprintf(r, sizeof(r),
-                     "D:%d,%.6f,%.4f,%.3f,%lu,%lu,fw=%s,raw=%.6f,%.4f,exp=%lu,%lu",
+                     "D:%d,%.6f,%.4f,%.3f,%lu,%lu,fw=%s,raw=%.6f,%.4f,exp=%lu,%lu,t=%.2f",
                      (int)cs.ready, cs.bias, cs.sigma, cs.mbit_per_sec,
                      (unsigned long)cs.stalls, (unsigned long)cs.stuck_frame_count,
                      sha, cs.raw_bias, cs.raw_sigma,
-                     (unsigned long)dex, (unsigned long)dgn);
+                     (unsigned long)dex, (unsigned long)dgn, cs.die_temp_c);
             link_reply(&from, seq, r);
             log_camera_stats("on-demand");
 
