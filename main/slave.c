@@ -267,14 +267,20 @@ static bool gcp_zscore_ok(int nseg, double *out)
  * *out_h is written only when the run produced BOTH. An entropy value the
  * master cannot pair with a z is useless to it, and a z without entropy is
  * still a full measurement in the channel that tests. */
-static bool gcp_zscore_h_ok(int nseg, double *out, bool *out_have_h, double *out_h)
+static bool gcp_zscore_h_ok(int nseg, double *out, bool *out_have_h, double *out_h,
+                            bool *out_have_pre, double *out_pre)
 {
     gcp_spec_t sp;
     gcp_spec_begin(&sp);
-    gcp_result_t r = gcp_zscore_spec(nseg, gcp_yield_cb, out, &sp);
+    double pre = 0.0;
+    gcp_result_t r = gcp_zscore_pre(nseg, gcp_yield_cb, out, &sp, &pre);
     if (r == GCP_CAM_FAULT) g_cam_fault = true;
-    if (r != GCP_OK) { *out_have_h = false; return false; }
+    if (r != GCP_OK) { *out_have_h = false; *out_have_pre = false; return false; }
     *out_have_h = gcp_spec_finish(&sp, out_h, NULL);
+    /* The pre-fold z rides on the parallel ring; a node whose ring allocation
+     * failed still reports z and H and simply has no third channel. */
+    *out_have_pre = camera_raw_stream_ok();
+    *out_pre = pre;
     return true;
 }
 
@@ -725,10 +731,10 @@ static void link_task(void *arg)
                 continue;
             }
             g_measuring = true;
-            double zraw = 0.0, hnorm = 0.0;
-            bool   have_h = false;
+            double zraw = 0.0, hnorm = 0.0, zpre = 0.0;
+            bool   have_h = false, have_pre = false;
             bool   ok = gcp_zscore_h_ok(seg_from_cmd(cmd + 1), &zraw,
-                                        &have_h, &hnorm);
+                                        &have_h, &hnorm, &have_pre, &zpre);
             g_measuring = false;
             char resp[64];
             if (!ok && g_cam_fault) {
@@ -761,8 +767,23 @@ static void link_task(void *arg)
                  * segment count, so M = nseg / GCP_SPEC_W on all of them and the
                  * master derives it. A node that disagreed about nseg would be
                  * producing a wrong z first. */
-                snprintf(resp, sizeof(resp), "Z:%.6f,%.8f",
-                         zraw - g_baseline_mean, hnorm);
+                /* ",<z_pre>" is APPENDED THIRD (2026-08-26), same rule again:
+                 * a master that predates it stops at the H, and a node without
+                 * the parallel ring omits it while still contributing z and H.
+                 * Six decimals is right here — z_pre is a z, on the same scale
+                 * as the first field, and it is RANKED, never tested. */
+                if (have_pre)
+                    snprintf(resp, sizeof(resp), "Z:%.6f,%.8f,%.6f",
+                             zraw - g_baseline_mean, hnorm, zpre);
+                else
+                    snprintf(resp, sizeof(resp), "Z:%.6f,%.8f",
+                             zraw - g_baseline_mean, hnorm);
+            } else if (have_pre) {
+                /* No H but a pre-fold z: the field is positional, so the empty
+                 * H slot has to be held open rather than shifting z_pre into
+                 * it. "nan" is what the master's parser reads as absent. */
+                snprintf(resp, sizeof(resp), "Z:%.6f,nan,%.6f",
+                         zraw - g_baseline_mean, zpre);
             } else {
                 snprintf(resp, sizeof(resp), "Z:%.6f", zraw - g_baseline_mean);
             }
