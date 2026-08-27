@@ -324,7 +324,8 @@ static esp_err_t diag_handler(httpd_req_t *req)
         "\"mean_pixel\":%.2f,\"mbit_s\":%.3f,\"zero_diff\":%.4f,\"stuck_frames\":%lu,"
         /* PRE-FOLD: the stream the sensor produced, before the XOR fold. The
          * fields above describe the folded one. See cam_raw_t in extract.h. */
-        "\"raw_bias\":%.6f,\"raw_sigma\":%.4f,\"raw_sigma_n\":%d,\"die_temp\":%s,"
+        "\"raw_bias\":%.6f,\"raw_sigma\":%.4f,\"raw_sigma_n\":%d,"
+        "\"raw_runs_z\":%.2f,\"die_temp\":%s,"
         "\"drops\":%lu,\"waits\":%lu,\"stalls\":%lu,"
         /* Per-pair wall-time split, same fields the master publishes: ms_wait
          * is time blocked in DQBUF waiting for the sensor. */
@@ -338,7 +339,7 @@ static esp_err_t diag_handler(httpd_req_t *req)
         cs.ready ? "true" : "false", (unsigned long long)cs.frame_pairs,
         cs.bias, cs.sigma, cs.mean_pixel_level, cs.mbit_per_sec, cs.zero_diff_frac,
         (unsigned long)cs.stuck_frame_count,
-        cs.raw_bias, cs.raw_sigma, cs.raw_sigma_samples, dt_txt,
+        cs.raw_bias, cs.raw_sigma, cs.raw_sigma_samples, cs.raw_runs_z, dt_txt,
         (unsigned long)cs.ring_drops,
         (unsigned long)cs.consumer_waits, (unsigned long)cs.stalls,
         cs.ms_pair, cs.ms_wait, cs.ms_extract, cs.ms_rest,
