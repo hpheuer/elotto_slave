@@ -259,28 +259,21 @@ static bool gcp_zscore_ok(int nseg, double *out)
     return r == GCP_OK;
 }
 
-/* The same run, with the spectral accumulator alongside (2026-08-25). The z is
- * bit-identical to what gcp_zscore_ok() produces — same loop, same arithmetic —
- * so only the measure path uses this one and the baseline stays as it was:
- * LoopStat.base is a drift reference for z and has no entropy counterpart.
- *
- * *out_h is written only when the run produced BOTH. An entropy value the
- * master cannot pair with a z is useless to it, and a z without entropy is
- * still a full measurement in the channel that tests. */
-static bool gcp_zscore_h_ok(int nseg, double *out, bool *out_have_h, double *out_h,
-                            bool *out_have_pre, double *out_pre)
+/* The same run with the PRE-FOLD z alongside (D45). Spectral H deleted (D53).
+ * *out_have_pre is set only when the parallel raw ring delivered a value. */
+static bool gcp_zscore_pre_ok(int nseg, double *out,
+                              bool *out_have_pre, double *out_pre,
+                              bool *out_have_h, double *out_h1, double *out_h2)
 {
-    gcp_spec_t sp;
-    gcp_spec_begin(&sp);
-    double pre = 0.0;
-    gcp_result_t r = gcp_zscore_pre(nseg, gcp_yield_cb, out, &sp, &pre);
+    double pre = 0.0, h1 = 0.0, h2 = 0.0;
+    gcp_result_t r = gcp_zscore_pre(nseg, gcp_yield_cb, out, &pre, &h1, &h2);
     if (r == GCP_CAM_FAULT) g_cam_fault = true;
-    if (r != GCP_OK) { *out_have_h = false; *out_have_pre = false; return false; }
-    *out_have_h = gcp_spec_finish(&sp, out_h, NULL);
-    /* The pre-fold z rides on the parallel ring; a node whose ring allocation
-     * failed still reports z and H and simply has no third channel. */
+    if (r != GCP_OK) { *out_have_pre = false; if (out_have_h) *out_have_h = false; return false; }
     *out_have_pre = camera_raw_stream_ok();
     *out_pre = pre;
+    if (out_have_h) *out_have_h = *out_have_pre && nseg >= 2;
+    if (out_h1) *out_h1 = h1;
+    if (out_h2) *out_h2 = h2;
     return true;
 }
 
@@ -401,109 +394,14 @@ static esp_err_t expose_handler(httpd_req_t *req)
     return camera_expose_handle(req, slave_busy());
 }
 
-/* GET /specdump?segs=<n> -- the mean Welch periodogram of a real measurement
- * window off THIS node's camera, 511 normalised bins, CSV. Same endpoint and
- * same format the master serves; served here because the data is what differs
- * between nodes, unlike /spectest which is pure arithmetic and master-only.
- *
- * It answers where the spectral power sits, which is what decides whether the
- * structure follows the sensor's ROW geometry: extraction is raster order, so a
- * SPATIAL period aliases to a fixed bin, a timing clock cannot. At RAW8
- * 800x800 the prediction is bin 512 (Nyquist, dropped) with the fold on and
- * bin 256 with it off.
- *
- * 409 while measuring: it consumes the same ring the command loop measures from
- * and would silently steal a run's bits. */
-static esp_err_t specdump_handler(httpd_req_t *req)
-{
-    if (g_measuring) {
-        httpd_resp_set_status(req, "409 Conflict");
-        httpd_resp_set_type(req, "text/plain");
-        httpd_resp_sendstr(req, "measuring");
-        return ESP_OK;
-    }
-
-    int segs = GCP_SPEC_W * 32;
-    char qry[64], val[24];
-    if (httpd_req_get_url_query_str(req, qry, sizeof(qry)) == ESP_OK &&
-        httpd_query_key_value(qry, "segs", val, sizeof(val)) == ESP_OK) {
-        int v = atoi(val);
-        if (v >= GCP_SPEC_W * GCP_SPEC_MIN_WIN && v <= EL_SEG_MAX) segs = v;
-    }
-    segs -= segs % GCP_SPEC_W;
-    if (segs < GCP_SPEC_W * GCP_SPEC_MIN_WIN) {
-        httpd_resp_set_status(req, "400 Bad Request");
-        httpd_resp_sendstr(req, "segs too small");
-        return ESP_OK;
-    }
-
-    g_measuring = true;
-    gcp_spec_t sp; double z = 0.0;
-    gcp_spec_begin(&sp);
-    gcp_result_t r = gcp_zscore_spec(segs, NULL, &z, &sp);
-    double h = 0.0; int m = 0;
-    bool ok = (r == GCP_OK) && gcp_spec_finish(&sp, &h, &m);
-    g_measuring = false;
-    if (!ok) {
-        httpd_resp_set_status(req, "503 Service Unavailable");
-        httpd_resp_sendstr(req, "camera did not deliver a full window set");
-        return ESP_OK;
-    }
-
-    float *p = malloc(sizeof(float) * GCP_SPEC_BINS);
-    if (!p || !gcp_spec_bins(p, GCP_SPEC_BINS, NULL)) {
-        free(p);
-        httpd_resp_set_status(req, "500 Internal Server Error");
-        httpd_resp_sendstr(req, "no periodogram");
-        return ESP_OK;
-    }
-
-    bool     fold = camera_get_xor_fold();
-    uint32_t fw = 0, fh = 0;
-    camera_get_geometry(&fw, &fh);
-    double bpp = fold ? 0.5 : 1.0;
-    double seg_per_row = (double)fw * bpp / 200.0;
-    double pred_bin = -1.0;
-    if (seg_per_row > 0.0) {
-        double f = 1.0 / seg_per_row;
-        f = f - (double)((long)f);
-        if (f > 0.5) f = 1.0 - f;
-        pred_bin = (double)GCP_SPEC_W * f;
-    }
-
-    camera_stats_t cam; camera_get_stats(&cam);
-    uint32_t expo = 0, gain = 0;
-    camera_get_exposure(&expo, &gain);
-    char line[256];
-    httpd_resp_set_type(req, "text/csv");
-    int n = snprintf(line, sizeof(line),
-        "# specdump w=%d bins=%d windows=%d segs=%d z=%.6f h_norm=%.8f\n"
-        "# fold=%d exposure=%lu frame=%lux%lu seg_per_row=%.4f pred_bin=%.1f\n"
-        "# raw_bias=%.6f raw_sigma=%.4f bias=%.6f sigma=%.4f\n"
-        "bin;p\n",
-        GCP_SPEC_W, GCP_SPEC_BINS, m, segs, z, h,
-        fold ? 1 : 0, (unsigned long)expo,
-        (unsigned long)fw, (unsigned long)fh, seg_per_row, pred_bin,
-        cam.raw_bias, cam.raw_sigma, cam.bias, cam.sigma);
-    httpd_resp_send_chunk(req, line, n);
-    for (int k = 0; k < GCP_SPEC_BINS; k++) {
-        n = snprintf(line, sizeof(line), "%d;%.9f\n", k + 1, (double)p[k]);
-        for (int i = 0; i < n; i++) if (line[i] == '.') line[i] = ',';
-        httpd_resp_send_chunk(req, line, n);
-    }
-    httpd_resp_send_chunk(req, NULL, 0);
-    free(p);
-    return ESP_OK;
-}
-
 static httpd_handle_t start_webserver(void)
 {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.stack_size        = 8192;
-    /* 4 here + 5 from elotto_ota = 9. Registration past the cap fails and the
-     * return value is checked nowhere, so an endpoint would just 404 silently —
-     * the same trap the master's comment documents. Raised with headroom. */
-    cfg.max_uri_handlers  = 12;   /* 5 here + 5 from elotto_ota = 10 */
+    /* Registration past the cap fails and the return value is checked nowhere,
+     * so an endpoint would just 404 silently — the same trap the master's
+     * comment documents. Raised with headroom. /specdump deleted with D53. */
+    cfg.max_uri_handlers  = 12;   /* 4 here + 5 from elotto_ota = 9 */
     cfg.recv_wait_timeout = 20;   /* /update streams a multi-hundred-KB body */
     cfg.send_wait_timeout = 20;
     cfg.lru_purge_enable  = true;
@@ -514,12 +412,10 @@ static httpd_handle_t start_webserver(void)
     static const httpd_uri_t diag = {"/diag", HTTP_GET, diag_handler, NULL};
     static const httpd_uri_t cal  = {"/calibrate", HTTP_GET, calibrate_handler, NULL};
     static const httpd_uri_t expo = {"/expose", HTTP_POST, expose_handler, NULL};
-    static const httpd_uri_t sdmp = {"/specdump", HTTP_GET, specdump_handler, NULL};
     httpd_register_uri_handler(srv, &root);
     httpd_register_uri_handler(srv, &diag);
     httpd_register_uri_handler(srv, &cal);
     httpd_register_uri_handler(srv, &expo);
-    httpd_register_uri_handler(srv, &sdmp);
     return srv;
 }
 
@@ -732,12 +628,13 @@ static void link_task(void *arg)
                 continue;
             }
             g_measuring = true;
-            double zraw = 0.0, hnorm = 0.0, zpre = 0.0;
-            bool   have_h = false, have_pre = false;
-            bool   ok = gcp_zscore_h_ok(seg_from_cmd(cmd + 1), &zraw,
-                                        &have_h, &hnorm, &have_pre, &zpre);
+            double zraw = 0.0, zpre = 0.0, zh1 = 0.0, zh2 = 0.0;
+            bool   have_pre = false, have_h = false;
+            int    nseg = seg_from_cmd(cmd + 1);
+            bool   ok = gcp_zscore_pre_ok(nseg, &zraw,
+                                          &have_pre, &zpre, &have_h, &zh1, &zh2);
             g_measuring = false;
-            char resp[64];
+            char resp[80];
             if (!ok && g_cam_fault) {
                 // No ",<C|T>" tag any more: with one source, a completed run can
                 // only have come from the camera, and a run that could not
@@ -751,38 +648,13 @@ static void link_task(void *arg)
                  * fabricated 0.0 that the master accepts as a real z. Void it:
                  * no z exists, and this node is not at fault. */
                 snprintf(resp, sizeof(resp), "V:aborted");
-            } else if (have_h) {
-                /* "Z:<z>,<H_norm>" (2026-08-25). The field is APPENDED, so a
-                 * master that predates it parses the z exactly as before and an
-                 * older slave simply omits it — the same degrade-safely rule the
-                 * 'K' and 'D' fields already follow.
-                 *
-                 * ⚠ EIGHT decimals, not six. H₀ sits at ~0,9968 with σ ≈ 2e-4 at
-                 * ?run=1; six decimals would quantise z_h in steps of ~0,005 σ,
-                 * which is harmless, and at ?run=5 (σ ≈ 3,9e-5) in steps of
-                 * ~0,026 σ, which is not. The window length must not change what
-                 * the wire can express.
-                 *
-                 * Only H_norm travels. The window count M is not sent because it
-                 * is not a free parameter: every node measures the SAME commanded
-                 * segment count, so M = nseg / GCP_SPEC_W on all of them and the
-                 * master derives it. A node that disagreed about nseg would be
-                 * producing a wrong z first. */
-                /* ",<z_pre>" is APPENDED THIRD (2026-08-26), same rule again:
-                 * a master that predates it stops at the H, and a node without
-                 * the parallel ring omits it while still contributing z and H.
-                 * Six decimals is right here — z_pre is a z, on the same scale
-                 * as the first field, and it is RANKED, never tested. */
-                if (have_pre)
-                    snprintf(resp, sizeof(resp), "Z:%.6f,%.8f,%.6f",
-                             zraw - g_baseline_mean, hnorm, zpre);
-                else
-                    snprintf(resp, sizeof(resp), "Z:%.6f,%.8f",
-                             zraw - g_baseline_mean, hnorm);
+            } else if (have_pre && have_h) {
+                /* Z:<z>,nan,<z_pre>,<h1>,<h2> (D56). Halves of the same
+                 * pre-fold window, nseg/2 split. */
+                snprintf(resp, sizeof(resp), "Z:%.6f,nan,%.6f,%.6f,%.6f",
+                         zraw - g_baseline_mean, zpre, zh1, zh2);
             } else if (have_pre) {
-                /* No H but a pre-fold z: the field is positional, so the empty
-                 * H slot has to be held open rather than shifting z_pre into
-                 * it. "nan" is what the master's parser reads as absent. */
+                /* "Z:<z>,nan,<z_pre>" (D53). Middle nan keeps z_pre positional. */
                 snprintf(resp, sizeof(resp), "Z:%.6f,nan,%.6f",
                          zraw - g_baseline_mean, zpre);
             } else {
@@ -811,13 +683,20 @@ static void link_task(void *arg)
              * ahead of it cannot trip over it. */
             uint32_t dex = 0, dgn = 0;
             camera_get_exposure(&dex, &dgn);
-            char r[224];
+            /* ,px= is the mean raw pixel level (2026-08-28). Tagged and
+             * appended like every field after the positional six, so a master
+             * too old to look simply never does. The master stamps it into
+             * LoopStat.cam_px at each block close: it is the covariate that
+             * separates a light change from a sensor change, and until now the
+             * only place it existed was a log line and a live /diag read. */
+            char r[240];
             snprintf(r, sizeof(r),
-                     "D:%d,%.6f,%.4f,%.3f,%lu,%lu,fw=%s,raw=%.6f,%.4f,exp=%lu,%lu,t=%.2f",
+                     "D:%d,%.6f,%.4f,%.3f,%lu,%lu,fw=%s,raw=%.6f,%.4f,exp=%lu,%lu,t=%.2f,px=%.2f",
                      (int)cs.ready, cs.bias, cs.sigma, cs.mbit_per_sec,
                      (unsigned long)cs.stalls, (unsigned long)cs.stuck_frame_count,
                      sha, cs.raw_bias, cs.raw_sigma,
-                     (unsigned long)dex, (unsigned long)dgn, cs.die_temp_c);
+                     (unsigned long)dex, (unsigned long)dgn, cs.die_temp_c,
+                     cs.mean_pixel_level);
             link_reply(&from, seq, r);
             log_camera_stats("on-demand");
 
