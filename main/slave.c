@@ -314,7 +314,8 @@ static esp_err_t diag_handler(httpd_req_t *req)
     else                         snprintf(dt_txt, sizeof(dt_txt), "null");
     snprintf(buf + pos, sizeof(buf) - pos,
         ",\"cam\":{\"ready\":%s,\"frame_pairs\":%llu,\"bias\":%.6f,\"sigma\":%.4f,"
-        "\"mean_pixel\":%.2f,\"mbit_s\":%.3f,\"zero_diff\":%.4f,\"stuck_frames\":%lu,"
+        "\"mean_pixel\":%.2f,\"mbit_s\":%.3f,\"consume_mbit_s\":%.3f,"
+        "\"zero_diff\":%.4f,\"stuck_frames\":%lu,"
         /* PRE-FOLD: the stream the sensor produced, before the XOR fold. The
          * fields above describe the folded one. See cam_raw_t in extract.h. */
         "\"raw_bias\":%.6f,\"raw_sigma\":%.4f,\"raw_sigma_n\":%d,"
@@ -330,7 +331,8 @@ static esp_err_t diag_handler(httpd_req_t *req)
         "\"exposure\":%lu,\"gain\":%lu,\"fold\":%s,"
         "\"autocorr\":[%.4f,%.4f,%.4f,%.4f]}}",
         cs.ready ? "true" : "false", (unsigned long long)cs.frame_pairs,
-        cs.bias, cs.sigma, cs.mean_pixel_level, cs.mbit_per_sec, cs.zero_diff_frac,
+        cs.bias, cs.sigma, cs.mean_pixel_level, cs.mbit_per_sec,
+        cs.consume_mbit_per_sec, cs.zero_diff_frac,
         (unsigned long)cs.stuck_frame_count,
         cs.raw_bias, cs.raw_sigma, cs.raw_sigma_samples, cs.raw_runs_z, dt_txt,
         (unsigned long)cs.ring_drops,
@@ -689,14 +691,19 @@ static void link_task(void *arg)
              * LoopStat.cam_px at each block close: it is the covariate that
              * separates a light change from a sensor change, and until now the
              * only place it existed was a log line and a live /diag read. */
-            char r[240];
+            char r[256];
             snprintf(r, sizeof(r),
-                     "D:%d,%.6f,%.4f,%.3f,%lu,%lu,fw=%s,raw=%.6f,%.4f,exp=%lu,%lu,t=%.2f,px=%.2f",
+                     "D:%d,%.6f,%.4f,%.3f,%lu,%lu,fw=%s,raw=%.6f,%.4f,exp=%lu,%lu,t=%.2f,px=%.2f"
+                     /* TAGGED and appended, like every field after the sixth:
+                      * a master too old to know it skips it, and the positional
+                      * parse in front cannot trip over it. */
+                     ",cons=%.3f",
                      (int)cs.ready, cs.bias, cs.sigma, cs.mbit_per_sec,
                      (unsigned long)cs.stalls, (unsigned long)cs.stuck_frame_count,
                      sha, cs.raw_bias, cs.raw_sigma,
                      (unsigned long)dex, (unsigned long)dgn, cs.die_temp_c,
-                     cs.mean_pixel_level);
+                     cs.mean_pixel_level,
+                     cs.consume_mbit_per_sec);
             link_reply(&from, seq, r);
             log_camera_stats("on-demand");
 
