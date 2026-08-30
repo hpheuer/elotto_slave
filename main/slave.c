@@ -791,5 +791,11 @@ void app_main(void)
     // Own task rather than app_main: the consumer's priority is load-bearing
     // (must outrank ELOTTO_CAM_TASK_PRIO) and its stack has to hold the socket
     // path plus float formatting, neither of which app_main's defaults promise.
-    xTaskCreate(link_task, "link", 6144, NULL, ELOTTO_CAM_TASK_PRIO + 1, NULL);
+    // PINNED off the extraction core for the same reason the master pins its
+    // session task -- see ELOTTO_CAM_TASK_CORE in camera.h. This one is created
+    // once at boot rather than per session, so it never showed the master's
+    // per-session flip; that makes it luck holding, not a guarantee.
+    xTaskCreatePinnedToCore(link_task, "link", 6144, NULL,
+                            ELOTTO_CAM_TASK_PRIO + 1, NULL,
+                            ELOTTO_CAM_CONSUMER_CORE);
 }
