@@ -636,7 +636,10 @@ static void link_task(void *arg)
             bool   ok = gcp_zscore_pre_ok(nseg, &zraw,
                                           &have_pre, &zpre, &have_h, &zh1, &zh2);
             g_measuring = false;
-            char resp[80];
+            /* 112, not 80: the five positional fields already run to ~55 and
+             * ,wsig= adds ~12. snprintf would truncate silently, and a clipped
+             * float is a plausible-looking wrong number on the wire. */
+            char resp[112];
             if (!ok && g_cam_fault) {
                 // No ",<C|T>" tag any more: with one source, a completed run can
                 // only have come from the camera, and a run that could not
@@ -661,6 +664,24 @@ static void link_task(void *arg)
                          zraw - g_baseline_mean, zpre);
             } else {
                 snprintf(resp, sizeof(resp), "Z:%.6f", zraw - g_baseline_mean);
+            }
+            /* ,wsig= is the camera's folded per-mini-run sigma over THIS window
+             * and nothing else (D62) — the number that says whether the bits
+             * this z was built from were disturbed while they were taken.
+             * TAGGED and appended, like ,cons= and ,fw= on the D reply: the
+             * master's positional parse for z_pre/h1/h2 counts commas from the
+             * front and cannot trip over a field behind them, and a master too
+             * old to look simply never does.
+             * ⚠ Only on a Z. An E: is a fault and a V: is a void; neither has a
+             * window to describe, and appending to them would put a number
+             * behind a reason string that the parser reads as part of it. */
+            if (resp[0] == 'Z') {
+                camera_stats_t ws;
+                camera_get_stats(&ws);
+                if (ws.win_sigma_samples > 0) {
+                    size_t l = strlen(resp);
+                    snprintf(resp + l, sizeof(resp) - l, ",wsig=%.4f", ws.win_sigma);
+                }
             }
             link_reply(&from, seq, resp);
 
