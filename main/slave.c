@@ -387,7 +387,7 @@ static esp_err_t diag_handler(httpd_req_t *req)
         (unsigned long)cs.consumer_waits, (unsigned long)cs.stalls,
         cs.ms_pair, cs.ms_wait, cs.ms_extract, cs.ms_rest,
         (unsigned long)exp_now, (unsigned long)gain_now,
-        camera_get_xor_fold() ? "true" : "false",
+        "false",
         cs.autocorr_lag[0], cs.autocorr_lag[1], cs.autocorr_lag[2], cs.autocorr_lag[3]);
 
     httpd_resp_set_type(req, "application/json");
@@ -634,11 +634,10 @@ static void link_task(void *arg)
                 g_measuring = false;
                 snprintf(r, sizeof(r), "OK:%lu,%lu,%d,%.6f,%.3f,%c",
                          (unsigned long)s_cal->exposure, (unsigned long)s_cal->gain,
-                         s_cal->xor_fold ? 1 : 0, s_cal->bias, s_cal->mbit_per_sec,
+                         0, s_cal->bias, s_cal->mbit_per_sec,
                          ok ? 'G' : 'U');
-                TLOG("cal done: exposure=%lu gain=%lu fold=%d %s (%lu ms, %d steps)\n",
+                TLOG("cal done: exposure=%lu gain=%lu %s (%lu ms, %d steps)\n",
                      (unsigned long)s_cal->exposure, (unsigned long)s_cal->gain,
-                     s_cal->xor_fold ? 1 : 0,
                      ok ? "gated" : "NO gated setting -- kept previous",
                      (unsigned long)s_cal->elapsed_ms, s_cal->nsteps);
                 log_camera_stats("after-calibration");
