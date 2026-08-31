@@ -364,8 +364,7 @@ static esp_err_t diag_handler(httpd_req_t *req)
         ",\"cam\":{\"ready\":%s,\"frame_pairs\":%llu,\"bias\":%.6f,\"sigma\":%.4f,"
         "\"mean_pixel\":%.2f,\"mbit_s\":%.3f,\"consume_mbit_s\":%.3f,"
         "\"zero_diff\":%.4f,\"stuck_frames\":%lu,"
-        /* PRE-FOLD: the stream the sensor produced, before the XOR fold. The
-         * fields above describe the folded one. See cam_raw_t in extract.h. */
+        /* Same bits as bias/sigma above `[D65]`. See cam_raw_t in extract.h. */
         "\"raw_bias\":%.6f,\"raw_sigma\":%.4f,\"raw_sigma_n\":%d,"
         "\"raw_runs_z\":%.2f,\"die_temp\":%s,"
         "\"drops\":%lu,\"waits\":%lu,\"stalls\":%lu,"
@@ -376,7 +375,7 @@ static esp_err_t diag_handler(httpd_req_t *req)
          * diagnostics view without them cannot answer "what is this node
          * running on right now?" -- the master reported them all along and the
          * slaves did not. */
-        "\"exposure\":%lu,\"gain\":%lu,\"fold\":%s,"
+        "\"exposure\":%lu,\"gain\":%lu,"
         "\"autocorr\":[%.4f,%.4f,%.4f,%.4f]}}",
         cs.ready ? "true" : "false", (unsigned long long)cs.frame_pairs,
         cs.bias, cs.sigma, cs.mean_pixel_level, cs.mbit_per_sec,
@@ -387,7 +386,6 @@ static esp_err_t diag_handler(httpd_req_t *req)
         (unsigned long)cs.consumer_waits, (unsigned long)cs.stalls,
         cs.ms_pair, cs.ms_wait, cs.ms_extract, cs.ms_rest,
         (unsigned long)exp_now, (unsigned long)gain_now,
-        "false",
         cs.autocorr_lag[0], cs.autocorr_lag[1], cs.autocorr_lag[2], cs.autocorr_lag[3]);
 
     httpd_resp_set_type(req, "application/json");
@@ -408,7 +406,7 @@ static esp_err_t root_handler(httpd_req_t *req)
         "<ul>"
         "<li><a href='/diag'>/diag</a> &mdash; camera health, source, firmware</li>"
         "<li><a href='/camlog'>/camlog</a> &mdash; the last 512 measurement windows: "
-        "per-window sigma, pre-fold sigma, mean_px, autocorr. Readable DURING a session, "
+        "per-window sigma, LSB sigma, mean_px, autocorr. Readable DURING a session, "
         "and the only place a disturbance can still be located in time</li>"
         "<li><a href='/calibrate'>/calibrate</a> &mdash; this node's whole last exposure sweep</li>"
         "<li><a href='/linearity'>/linearity?exp=32,64,128,256</a> &mdash; steady light "
@@ -516,7 +514,7 @@ static httpd_handle_t start_webserver(void)
  * Protocol, unchanged from the UART era; only the framing around it is new
  * (see components/elotto_link/include/elotto_link.h):
  *   P        → OK                  (discovery, was the wired ping)
- *   K<ms>    → OK:exp,gain,fold,bias,mbit_s,<G|U>   (calibrate the camera)
+ *   K<ms>    → OK:exp,gain,bias,mbit_s,<G|U>        (calibrate the camera)
  *   B<n>,<s> → OK                  (baseline, n runs of s segments each)
  *   M<s>     → Z:<float>            (measure s segments)
  *              E:<reason>          (camera stopped -- no z exists for this run)
@@ -624,7 +622,7 @@ static void link_task(void *arg)
                 // Nothing to tune. Answered rather than ignored: silence here
                 // would be counted as a missed reply and walk this node toward
                 // being dropped for a reason that has nothing to do with it.
-                snprintf(r, sizeof(r), "OK:0,0,0,0.500000,0.000,U");
+                snprintf(r, sizeof(r), "OK:0,0,0.500000,0.000,U");
                 TLOG("cal: no camera (%s) -- nothing to calibrate\n",
                      s_cal ? "not streaming" : "no PSRAM for the table");
             } else {
@@ -632,9 +630,9 @@ static void link_task(void *arg)
                                        // being reconfigured
                 bool ok = camera_calibrate(budget, cal_abort_cb, s_cal);
                 g_measuring = false;
-                snprintf(r, sizeof(r), "OK:%lu,%lu,%d,%.6f,%.3f,%c",
+                snprintf(r, sizeof(r), "OK:%lu,%lu,%.6f,%.3f,%c",
                          (unsigned long)s_cal->exposure, (unsigned long)s_cal->gain,
-                         0, s_cal->bias, s_cal->mbit_per_sec,
+                         s_cal->bias, s_cal->mbit_per_sec,
                          ok ? 'G' : 'U');
                 TLOG("cal done: exposure=%lu gain=%lu %s (%lu ms, %d steps)\n",
                      (unsigned long)s_cal->exposure, (unsigned long)s_cal->gain,
@@ -693,7 +691,7 @@ static void link_task(void *arg)
             } else {
                 snprintf(resp, sizeof(resp), "Z:%.6f", zraw);
             }
-            /* ,wsig= is the camera's folded per-mini-run sigma over THIS window
+            /* ,wsig= is the camera's per-mini-run sigma over THIS window
              * and nothing else (D62) — the number that says whether the bits
              * this z was built from were disturbed while they were taken.
              * TAGGED and appended, like ,cons= and ,fw= on the D reply: the
@@ -738,7 +736,7 @@ static void link_task(void *arg)
             char sha[17] = {0};
             for (int i = 0; i < 8; i++)
                 snprintf(sha + i * 2, 3, "%02x", desc->app_elf_sha256[i]);
-            /* ,raw= is the PRE-FOLD pair (2026-08-26, D43). TAGGED and
+            /* ,raw= is the LSB pair (2026-08-26, D43). TAGGED and
              * appended for the same reason ,fw= is: a slave too old to send it
              * is simply absent rather than misread, and the positional parse
              * ahead of it cannot trip over it. */
