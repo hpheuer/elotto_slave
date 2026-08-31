@@ -88,6 +88,52 @@ static double        g_baseline_mean = 0.0;
 static volatile bool g_abort         = false;
 static volatile bool g_measuring     = false;   // refuses OTA mid-measurement
 
+/* ── The session latch (D64) ──────────────────────────────────────────
+ *
+ * g_measuring is true for the ~2 s of an actual window and nothing else, so
+ * for years `POST /expose` was refused during a measurement and WIDE OPEN
+ * during the 0,8 s gap between two of them — while the node's own HTML page
+ * claimed "409 while measuring", which an operator reads as "409 during a
+ * session". On 2026-08-31 a parameterless /expose landed on slave2 in the
+ * middle of a running pass: it rewrote the exposure to its own value (no
+ * harm) and called camera_stats_reset() (the block's camera statistics
+ * restarted mid-block). A version with ?exp= would have moved the operating
+ * point under a session that had already certified a rung.
+ *
+ * The node has no session state of its own, so it derives one from the only
+ * evidence it has — the master's traffic:
+ *   'M' or 'K'  a session is measuring or sweeping        -> latch, stamp
+ *   'A'         the session ended (abort OR normal end)   -> release at once
+ *   silence     no M/K for SESSION_IDLE_MS                -> release
+ *
+ * ⚠ 'P' deliberately does NOT latch. Discovery is also what the UI's node
+ * button sends, and locking every slave because someone pressed "probe" would
+ * be a worse failure than the one this fixes.
+ * ⚠ The idle release is what makes a master reboot self-healing — the master
+ * cannot send 'A' from inside a crash — and it is also the hole: the attended
+ * gates (PHASE_READY, PHASE_POOL_CONFIRM) park longer than this with a session
+ * genuinely open. Those are attended by definition, so the operator standing
+ * at the rig is the guard there. Runs are 2..5 s and the sweep is ~10 s, so
+ * 60 s never expires under a pass that is actually running. */
+#define SESSION_IDLE_MS  60000
+static volatile bool     g_session      = false;
+static volatile int64_t  g_session_t_us = 0;
+
+static void session_mark(void)   { g_session = true;  g_session_t_us = esp_timer_get_time(); }
+static void session_clear(void)  { g_session = false; }
+
+/* True while a session owns this node's camera. Read by the HTTP handlers that
+ * touch the sensor; the measurement path itself never consults it. */
+static bool session_active(void)
+{
+    if (!g_session) return false;
+    if (esp_timer_get_time() - g_session_t_us > SESSION_IDLE_MS * 1000LL) {
+        g_session = false;      /* stale latch -- the master went away */
+        return false;
+    }
+    return true;
+}
+
 /* ── Ethernet (Waveshare ESP32-P4-ETH, IP101GRI over RMII) ─────────────
  * Same pins and bring-up as the master's elotto.c and the updater's
  * ota_main.c — proven on this exact board, unlike examples/ethernet/basic. */
@@ -279,7 +325,12 @@ static bool gcp_zscore_pre_ok(int nseg, double *out,
 
 /* ── HTTP: own /diag, plus the shared update endpoints ────────────────── */
 
-static bool slave_busy(void) { return g_measuring; }
+/* The predicate every sensor-touching handler passes down. It is deliberately
+ * WIDER than g_measuring: see the session latch above for what that cost.
+ * ⚠ OTA keeps using g_measuring, not this — refusing an update for a whole
+ * session would break the documented "abort, then flash" workflow, and an OTA
+ * between two runs is merely wasteful, not corrupting. */
+static bool slave_busy(void) { return g_measuring || session_active(); }
 
 /* Drop the pre-window bits and wait for a fresh pair. false = did not settle,
  * in which case the RING WAS NOT DROPPED (the flush happens at a pair boundary)
@@ -359,10 +410,19 @@ static esp_err_t root_handler(httpd_req_t *req)
         "on port 5000 (docs/PLAN_NETWORK.md Phase C).</p>"
         "<ul>"
         "<li><a href='/diag'>/diag</a> &mdash; camera health, source, firmware</li>"
+        "<li><a href='/camlog'>/camlog</a> &mdash; the last 512 measurement windows: "
+        "per-window sigma, pre-fold sigma, mean_px, autocorr. Readable DURING a session, "
+        "and the only place a disturbance can still be located in time</li>"
         "<li><a href='/calibrate'>/calibrate</a> &mdash; this node's whole last exposure sweep</li>"
+        "<li><a href='/linearity'>/linearity?exp=32,64,128,256</a> &mdash; steady light "
+        "doubles mean_px when the exposure doubles; flickering light does not. Restores the "
+        "entry exposure. 409 for the whole session</li>"
+        "<li><a href='/camtest'>/camtest</a> &mdash; word-wise extractor against the byte-wise "
+        "reference, on this node's silicon. 409 for the whole session</li>"
         "<li><a href='/otainfo'>/otainfo</a> &mdash; image version / slot / state</li>"
         "<li><code>POST /expose?exp=&lt;lines&gt;&amp;gain=&lt;g&gt;</code> &mdash; set this "
-        "camera's operating point; driven from the master's /diag page. 409 while measuring</li>"
+        "camera's operating point; driven from the master's /diag page. 409 for the whole "
+        "session, not merely during a window (D64)</li>"
         "<li><code>POST /update</code> &mdash; refused with 409 while measuring</li>"
         "</ul>";
     httpd_resp_set_type(req, "text/html");
@@ -396,6 +456,31 @@ static esp_err_t expose_handler(httpd_req_t *req)
     return camera_expose_handle(req, slave_busy());
 }
 
+/* GET /camlog — this node's per-window camera log (D64). No busy predicate:
+ * it only reads a ring, and the whole point is to be pullable DURING a session
+ * while the disturbance is still in it. */
+static esp_err_t camlog_handler(httpd_req_t *req)
+{
+    return camera_winlog_send_json(req);
+}
+
+/* GET /linearity — steady light or flickering light, in one request. Drives
+ * the exposure registers, so it is refused for the whole session, not just
+ * during a window. */
+static esp_err_t linearity_handler(httpd_req_t *req)
+{
+    return camera_linearity_handle(req, slave_busy());
+}
+
+/* GET /camtest — the extraction self-test, on this node's own silicon. The
+ * handler was shared from the start and only the master ever registered it, so
+ * "all four run the same extractor" could be asserted on one board and checked
+ * on none of the others. */
+static esp_err_t camtest_handler(httpd_req_t *req)
+{
+    return camera_selftest_handle(req, slave_busy());
+}
+
 static httpd_handle_t start_webserver(void)
 {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
@@ -403,7 +488,10 @@ static httpd_handle_t start_webserver(void)
     /* Registration past the cap fails and the return value is checked nowhere,
      * so an endpoint would just 404 silently — the same trap the master's
      * comment documents. Raised with headroom. /specdump deleted with D53. */
-    cfg.max_uri_handlers  = 12;   /* 4 here + 5 from elotto_ota = 9 */
+    /* ⚠ The registration return value is unchecked here exactly as on the
+     * master, so an overflow shows up as a 404 and not as an error: 7 here +
+     * 5 from elotto_ota = 12. Raise this BEFORE adding a thirteenth. */
+    cfg.max_uri_handlers  = 14;   /* 7 here + 5 from elotto_ota = 12 */
     cfg.recv_wait_timeout = 20;   /* /update streams a multi-hundred-KB body */
     cfg.send_wait_timeout = 20;
     cfg.lru_purge_enable  = true;
@@ -414,10 +502,16 @@ static httpd_handle_t start_webserver(void)
     static const httpd_uri_t diag = {"/diag", HTTP_GET, diag_handler, NULL};
     static const httpd_uri_t cal  = {"/calibrate", HTTP_GET, calibrate_handler, NULL};
     static const httpd_uri_t expo = {"/expose", HTTP_POST, expose_handler, NULL};
+    static const httpd_uri_t clog = {"/camlog", HTTP_GET, camlog_handler, NULL};
+    static const httpd_uri_t lin  = {"/linearity", HTTP_GET, linearity_handler, NULL};
+    static const httpd_uri_t ctst = {"/camtest", HTTP_GET, camtest_handler, NULL};
     httpd_register_uri_handler(srv, &root);
     httpd_register_uri_handler(srv, &diag);
     httpd_register_uri_handler(srv, &cal);
     httpd_register_uri_handler(srv, &expo);
+    httpd_register_uri_handler(srv, &clog);
+    httpd_register_uri_handler(srv, &lin);
+    httpd_register_uri_handler(srv, &ctst);
     return srv;
 }
 
@@ -524,6 +618,7 @@ static void link_task(void *arg)
                 cal_segs = 0;
             }
             camera_cal_set_z_scale(gcp_z_per_bias(cal_segs));
+            session_mark();     /* a sweep means a session owns this camera */
             g_abort = false;
             link_drain();       // a stale 'A' must not abort the sweep it precedes
 
@@ -606,6 +701,7 @@ static void link_task(void *arg)
             log_camera_stats("after-baseline");
 
         } else if (cmd[0] == 'M') {
+            session_mark();
             g_abort = false;
             g_cam_fault = false;
             g_measuring = true;
@@ -682,6 +778,16 @@ static void link_task(void *arg)
                     size_t l = strlen(resp);
                     snprintf(resp + l, sizeof(resp) - l, ",wsig=%.4f", ws.win_sigma);
                 }
+                /* Same instant, into this node's own ring (D64). The wire
+                 * carries wsig and nothing else; raw_sigma, mean_px, autocorr
+                 * and zero_diff stay here, and they are what says whether a
+                 * disturbed window was the light, the sensor or neither.
+                 * Tagged with the sequence of the 'M' being answered: the
+                 * master can line its results[] up against this without the
+                 * two needing a shared clock.
+                 * ⚠ Inside the `resp[0] == 'Z'` branch on purpose — a faulted
+                 * or voided run has no window worth recording. */
+                camera_winlog_push(seq);
             }
             link_reply(&from, seq, resp);
 
@@ -729,7 +835,12 @@ static void link_task(void *arg)
             log_camera_stats("on-demand");
 
         } else if (cmd[0] == 'A') {
+            /* 'A' is both "stop this run" and "the session is over": the master
+             * broadcasts it on abort and again at finalize:, so releasing the
+             * latch here is what makes /expose and /linearity reachable the
+             * moment a session ends, without waiting out SESSION_IDLE_MS. */
             g_abort = true;
+            session_clear();
             link_reply(&from, seq, "OK");
 
         } else if (cmd[0] == 'R') {
