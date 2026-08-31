@@ -119,7 +119,16 @@ static volatile bool g_measuring     = false;   // refuses OTA mid-measurement
 static volatile bool     g_session      = false;
 static volatile int64_t  g_session_t_us = 0;
 
-static void session_mark(void)   { g_session = true;  g_session_t_us = esp_timer_get_time(); }
+static void session_mark(void)
+{
+    /* A latch going from released to held IS the session boundary as this node
+     * can see it — no wire field needed, and it covers a master that rebooted
+     * without ever sending 'A'. Only the transition bumps the log's session
+     * ordinal; the ~3000 'M's that follow must not each open a new one. */
+    if (!g_session) camera_winlog_new_session();
+    g_session = true;
+    g_session_t_us = esp_timer_get_time();
+}
 static void session_clear(void)  { g_session = false; }
 
 /* True while a session owns this node's camera. Read by the HTTP handlers that
@@ -298,26 +307,14 @@ static bool gcp_yield_cb(void)
  * reason was the camera rather than an abort (the caller turns that into an
  * "E:" reply). A short run is not a small run: its z would be normalised by a
  * √segments it never reached, so a void run yields nothing at all. */
-static bool gcp_zscore_ok(int nseg, double *out)
-{
-    gcp_result_t r = gcp_zscore_raw(nseg, gcp_yield_cb, out);
-    if (r == GCP_CAM_FAULT) g_cam_fault = true;
-    return r == GCP_OK;
-}
-
-/* The same run with the PRE-FOLD z alongside (D45). Spectral H deleted (D53).
- * *out_have_pre is set only when the parallel raw ring delivered a value. */
 static bool gcp_zscore_pre_ok(int nseg, double *out,
-                              bool *out_have_pre, double *out_pre,
                               bool *out_have_h, double *out_h1, double *out_h2)
 {
-    double pre = 0.0, h1 = 0.0, h2 = 0.0;
-    gcp_result_t r = gcp_zscore_pre(nseg, gcp_yield_cb, out, &pre, &h1, &h2);
+    double h1 = 0.0, h2 = 0.0;
+    gcp_result_t r = gcp_zscore_pre(nseg, gcp_yield_cb, out, &h1, &h2);
     if (r == GCP_CAM_FAULT) g_cam_fault = true;
-    if (r != GCP_OK) { *out_have_pre = false; if (out_have_h) *out_have_h = false; return false; }
-    *out_have_pre = camera_raw_stream_ok();
-    *out_pre = pre;
-    if (out_have_h) *out_have_h = *out_have_pre && nseg >= 2;
+    if (r != GCP_OK) { if (out_have_h) *out_have_h = false; return false; }
+    if (out_have_h) *out_have_h = nseg >= 2;
     if (out_h1) *out_h1 = h1;
     if (out_h2) *out_h2 = h2;
     return true;
@@ -649,56 +646,9 @@ static void link_task(void *arg)
             link_reply(&from, seq, r);
 
         } else if (cmd[0] == 'B') {
-            int cnt = atoi(cmd + 1);
-            if (cnt <= 0 || cnt > 5000) cnt = 100;
-            const char *sarg = strchr(cmd, ',');
-            g_abort = false;
-            g_cam_fault = false;
-            link_drain();   // a stale 'A' must not abort the session it precedes
-            if (!camera_is_ready()) {
-                // Say so at the start rather than producing a baseline of zeros:
-                // the master reboots this node and carries on with the rest.
-                link_reply(&from, seq, "E:camera not streaming");
-                TLOG("Baseline refused -- camera not streaming\n");
-                log_camera_stats("NO-CAMERA");
-                continue;
-            }
-            int nseg = seg_from_cmd(sarg ? sarg + 1 : NULL);
-            g_measuring = true;
-            double bsum = 0.0;
-            int    done = 0, contrib = 0;   /* contrib: runs that produced a z */
-            for (; done < cnt && !g_abort && !g_cam_fault; done++) {
-                /* The baseline flushes like every other run: it is the drift
-                 * reference the master cross-checks against the block's own
-                 * mean, and two estimates of one offset must draw on bits of
-                 * the same provenance. A run whose flush times out is skipped,
-                 * not averaged in. */
-                if (!ring_flush_ok()) { TLOG("Baseline run skipped -- flush timeout\n"); continue; }
-                double bz = 0.0;
-                if (!gcp_zscore_ok(nseg, &bz)) break;
-                bsum += bz;
-                contrib++;
-            }
-            g_measuring = false;
-            if (g_cam_fault) {
-                // A void run must not be averaged in as a zero -- that would pull
-                // the offset toward 0 and bias every run it is later subtracted
-                // from. Report the fault instead and let the master reboot us.
-                g_baseline_mean = 0.0;
-                link_reply(&from, seq, "E:camera stalled during baseline");
-                TLOG("Baseline ABORTED -- camera stalled after %d/%d runs\n", done, cnt);
-                log_camera_stats("CAMERA-FAULT");
-                continue;
-            }
-            /* ⚠ Divide by the runs that CONTRIBUTED, not by the loop counter.
-             * A flush-timeout run is skipped, and dividing by `done` would have
-             * averaged it in as a zero -- pulling the reference toward 0, which
-             * is exactly what the comment above this loop already forbids. */
-            g_baseline_mean = (g_abort || contrib == 0) ? 0.0 : bsum / contrib;
-            link_reply(&from, seq,"OK");
-            TLOG("Baseline done: mean=%.4f (%d contributing of %d/%d runs, %d seg)\n",
-                 g_baseline_mean, contrib, done, cnt, nseg);
-            log_camera_stats("after-baseline");
+            /* Phase 1 baseline is deleted (D48). A master that still sends B
+             * is the wrong image; refuse rather than measure. */
+            link_reply(&from, seq, "E:no baseline");
 
         } else if (cmd[0] == 'M') {
             session_mark();
@@ -726,40 +676,23 @@ static void link_task(void *arg)
                 continue;
             }
             g_measuring = true;
-            double zraw = 0.0, zpre = 0.0, zh1 = 0.0, zh2 = 0.0;
-            bool   have_pre = false, have_h = false;
+            double zraw = 0.0, zh1 = 0.0, zh2 = 0.0;
+            bool   have_h = false;
             int    nseg = seg_from_cmd(cmd + 1);
-            bool   ok = gcp_zscore_pre_ok(nseg, &zraw,
-                                          &have_pre, &zpre, &have_h, &zh1, &zh2);
+            bool   ok = gcp_zscore_pre_ok(nseg, &zraw, &have_h, &zh1, &zh2);
             g_measuring = false;
-            /* 112, not 80: the five positional fields already run to ~55 and
-             * ,wsig= adds ~12. snprintf would truncate silently, and a clipped
-             * float is a plausible-looking wrong number on the wire. */
             char resp[112];
             if (!ok && g_cam_fault) {
-                // No ",<C|T>" tag any more: with one source, a completed run can
-                // only have come from the camera, and a run that could not
-                // complete says so outright instead of reporting a substitute.
                 snprintf(resp, sizeof(resp), "E:camera stalled mid-run");
                 log_camera_stats("CAMERA-FAULT");
             } else if (!ok) {
-                /* GCP_ABORTED: the master asked us to stop mid-run (the yield
-                 * poll picked up an 'A'). gcp_zscore_raw() writes *out only on
-                 * GCP_OK, so zraw is unset here — answering "Z:" would send a
-                 * fabricated 0.0 that the master accepts as a real z. Void it:
-                 * no z exists, and this node is not at fault. */
                 snprintf(resp, sizeof(resp), "V:aborted");
-            } else if (have_pre && have_h) {
-                /* Z:<z>,nan,<z_pre>,<h1>,<h2> (D56). Halves of the same
-                 * pre-fold window, nseg/2 split. */
-                snprintf(resp, sizeof(resp), "Z:%.6f,nan,%.6f,%.6f,%.6f",
-                         zraw - g_baseline_mean, zpre, zh1, zh2);
-            } else if (have_pre) {
-                /* "Z:<z>,nan,<z_pre>" (D53). Middle nan keeps z_pre positional. */
-                snprintf(resp, sizeof(resp), "Z:%.6f,nan,%.6f",
-                         zraw - g_baseline_mean, zpre);
+            } else if (have_h) {
+                /* Z:<z>,<h1>,<h2> (D65). One stream; halves of the same window. */
+                snprintf(resp, sizeof(resp), "Z:%.6f,%.6f,%.6f",
+                         zraw, zh1, zh2);
             } else {
-                snprintf(resp, sizeof(resp), "Z:%.6f", zraw - g_baseline_mean);
+                snprintf(resp, sizeof(resp), "Z:%.6f", zraw);
             }
             /* ,wsig= is the camera's folded per-mini-run sigma over THIS window
              * and nothing else (D62) — the number that says whether the bits

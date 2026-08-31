@@ -54,10 +54,12 @@ all. That is why this node ran the recovery updater from Phase A until Phase C g
 | endpoint | |
 |---|---|
 | `GET /` | what this node is |
-| `GET /diag` | camera health and firmware identity (same JSON the master serves at `/diagjson`) |
+| `GET /diag` | camera health and firmware identity |
+| `GET /camlog` | this node's per-window camera ring |
+| `GET /linearity` | exposure ladder: steady light vs flicker |
 | `GET /otainfo` | image version / slot / state |
-| `POST /update` | push firmware; **409** while a measurement is running |
-| `POST /expose` | set this node's exposure/gain by hand, for tuning the physical light |
+| `POST /update` | push firmware; **409** only while a window is open (`g_measuring`) |
+| `POST /expose` | set exposure/gain; **409 for the whole session** (latch: M/K set, A or 60 s silence release) |
 
 ## ⚠ Three components come from the master repo
 
@@ -80,18 +82,17 @@ Every datagram is one frame: `EL1 <seq> <payload>`. The payload is unchanged fro
 
 | Command | Reply | Meaning |
 |---|---|---|
-| `P` | `OK` | Discovery (broadcast; replaces the wired ping) |
-| `B<runs>,<seg>` | `OK` after n runs | Baseline calibration, stores own baseline mean; **re-arms the camera** (marks a session start) |
-| `M<seg>` | `Z:<float>` | One measurement, baseline-corrected Z |
+| `P` | `OK` | Discovery (broadcast) |
+| `M<seg>` | `Z:<z>[,<h1>,<h2>][,wsig=]` | One measurement; halves of the same window; camera σ tagged |
 | `K<budget_ms>,<segs>` | `OK:<exp>,<gain>,<fold>,<bias>,<mbit_s>,<G\|U>` | Sweep the exposure ladder and certify a rung |
-| `D` | `D:<ready>,<bias>,<σ>,<Mbit/s>,<stalls>,<stuck>,fw=<sha>` | Camera diagnostics; the master asks once per block for its `/loops` table |
-| `A` | `OK` | Abort (also polled mid-run) |
+| `D` | `D:<ready>,<bias>,<σ>,<Mbit/s>,<stalls>,<stuck>,fw=<sha>,…` | Camera diagnostics; the master asks once per block for `/loops` |
+| `A` | `OK` | Abort — also releases the session latch |
 | `R` | `OK` | Reboot (the master's answer to a camera fault here) |
 
 Any command can answer **`E:<reason>`** instead. That is the whole failure path: the master names
 the node in `fault`, drops it, and sends `R`.
 
-**The segment count travels on the wire**, in `B`, `M` and `K` alike. It is a session parameter
+**The segment count travels on the wire**, in `M` and `K`. It is a session parameter
 on the master (derived from `?run=`), not a constant compiled into both firmwares, so no two
 nodes can integrate over different lengths. ⚠ A receiver that gets an out-of-range count does not clamp
 it — it substitutes its own, which is visible in the reply rather than silently wrong.
