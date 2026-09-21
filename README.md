@@ -29,10 +29,7 @@ fictional. The firmware probes both chips and binds whichever answers (`GET /dia
 exposure ladder is gated off for exactly that reason — on this rig exposures 4 and 8 fail to
 certify while 16…128 pass. If rungs start failing, the answer is more light, not a lower floor.
 
-⛔ **There is no second source.** The on-chip TRNG is deleted from this firmware and must not come
-back in any form: a whitened hardware RNG would be indistinguishable from the real thing in every
-statistic this project computes. A node whose camera stops delivering answers `E:<reason>` and is
-dropped and rebooted by the master — reporting a fault is the fallback.
+A node whose camera stops answers `E:<reason>` and is dropped and rebooted by the master.
 
 Full architecture, protocol timing, camera physics and robustness details: see the master
 repo's **[Dual-ESP: Master & Slave](https://github.com/hpheuer/elotto#dual-esp-master--slave)**

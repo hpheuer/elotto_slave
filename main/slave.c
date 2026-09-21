@@ -69,13 +69,7 @@ static const char *TAG = "slave";
 #define SEG_MIN     EL_SEG_MIN
 #define SEG_MAX     EL_SEG_MAX
 
-/* ENTROPY IS PHOTONS, AND ONLY PHOTONS (user decision, 2026-07-26).
- *
- * The on-chip TRNG is removed from this firmware. This node measures its OWN
- * OV5647 or IMX219 — never one shared with the master, or the ÷√k combination would be
- * counting one measurement twice — and if that camera stops delivering there is
- * nothing to fall back to by design. The node reports "E:<reason>" instead of a
- * z and the master reboots it. See sensor.h in the master repo for why. */
+/* Entropy is photons from this node's own camera. Camera stall → E:<reason>. */
 static volatile bool g_cam_fault = false;   // camera died during the current run
 
 /* The calibration sweep's table (~1.2 KB). PSRAM and allocated once: the camera
