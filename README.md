@@ -20,10 +20,10 @@ on per-block combined σ and the full pairwise matrix, never on one correlation 
 | **[hpheuer](https://github.com/hpheuer)** | Design, hardware, experiment, and repository ownership |
 | **[Grok](https://x.ai)** (xAI) | Co-author — implementation, debugging, live OTA validation, and docs (Grok Build) |
 
-**Its own source, never a shared one.** This node has its **own OV5647 camera** on its CSI
-connector; entropy is photon shot + read noise from non-overlapping frame pairs. Sharing one
-camera across nodes would make their measurements identical by construction and the √k gain
-fictional.
+**Its own source, never a shared one.** This node has its **own camera** (OV5647 or IMX219) on
+its CSI connector; entropy is photon shot + read noise from non-overlapping frame pairs. Sharing
+one camera across nodes would make their measurements identical by construction and the √k gain
+fictional. The firmware probes both chips and binds whichever answers (`GET /diag` `cam_sensor`).
 
 ⚠ **The enclosure is LIT, not dark.** Photons are what does the whitening, and the dark end of the
 exposure ladder is gated off for exactly that reason — on this rig exposures 4 and 8 fail to
@@ -72,8 +72,9 @@ all. That is why this node ran the recovery updater from Phase A until Phase C g
 - **A change to any of them affects several nodes** — build and flash all of them, and commit
   the repos together.
 
-Camera: OV5647 on the CSI connector, SCCB on GPIO8/7, XCLK unwired (the RPi-style module clocks
-itself). PSRAM is mandatory when the camera source is used.
+Camera: OV5647 or IMX219 on the CSI connector, SCCB on GPIO8/7, XCLK unwired (RPi-style modules
+clock themselves). 15-pin FPC, same as the OV module — not the Pi-5 22-pin cable. PSRAM is
+mandatory.
 
 ## Protocol (ASCII over UDP; the slave only ever answers)
 

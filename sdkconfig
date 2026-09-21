@@ -3901,7 +3901,7 @@ CONFIG_WL_SECTOR_SIZE=4096
 # end of Wear Levelling
 
 #
-# Elotto Camera (OV5647 dark-frame entropy)
+# Elotto Camera (OV5647 / IMX219 entropy)
 #
 CONFIG_ELOTTO_CAM_ENABLE=y
 CONFIG_ELOTTO_CAM_XCLK_PIN=-1
@@ -3917,7 +3917,7 @@ CONFIG_ELOTTO_CAM_RESET_PIN=-1
 CONFIG_ELOTTO_CAM_PWDN_PIN=-1
 CONFIG_ELOTTO_CAM_REG_EXPOSURE=16
 CONFIG_ELOTTO_CAM_REG_GAIN=1023
-# end of Elotto Camera (OV5647 dark-frame entropy)
+# end of Elotto Camera (OV5647 / IMX219 entropy)
 
 #
 # CMake Utilities
@@ -3948,23 +3948,35 @@ CONFIG_CU_DIAGNOSTICS_COLOR_ALWAYS=y
 # Select and Set Camera Sensor
 #
 # default:
+# CONFIG_CAMERA_BF20A6 is not set
+# default:
+# CONFIG_CAMERA_BF3031 is not set
+# default:
+# CONFIG_CAMERA_BF3045 is not set
+# default:
 # CONFIG_CAMERA_BF3901 is not set
 # default:
 # CONFIG_CAMERA_BF3925 is not set
 # default:
 # CONFIG_CAMERA_BF3A03 is not set
 # default:
-# CONFIG_CAMERA_BF20A6 is not set
-# default:
-# CONFIG_CAMERA_BF3045 is not set
-# default:
 # CONFIG_CAMERA_GC0308 is not set
 # default:
+# CONFIG_CAMERA_GC032A is not set
+# default:
+# CONFIG_CAMERA_GC2053 is not set
+# default:
 # CONFIG_CAMERA_GC2145 is not set
+# default:
+# CONFIG_CAMERA_GC2607 is not set
+# default:
+# CONFIG_CAMERA_GC4053 is not set
 # default:
 # CONFIG_CAMERA_LT6911 is not set
 # default:
 # CONFIG_CAMERA_MIRA220 is not set
+# default:
+# CONFIG_CAMERA_MIT245 is not set
 # default:
 # CONFIG_CAMERA_MT9D111 is not set
 # default:
@@ -3975,6 +3987,8 @@ CONFIG_CU_DIAGNOSTICS_COLOR_ALWAYS=y
 # CONFIG_CAMERA_OV2640 is not set
 # default:
 # CONFIG_CAMERA_OV2710 is not set
+# default:
+# CONFIG_CAMERA_OV3640 is not set
 # default:
 # CONFIG_CAMERA_OV3660 is not set
 # default:
@@ -4026,19 +4040,27 @@ CONFIG_CAMERA_OV5647_DEFAULT_IPA_JSON_CONFIGURATION_FILE=y
 # default:
 # CONFIG_CAMERA_SC121AT is not set
 # default:
+# CONFIG_CAMERA_SC132GS is not set
+# default:
 # CONFIG_CAMERA_SC1346 is not set
 # default:
 # CONFIG_CAMERA_SC202CS is not set
 # default:
+# CONFIG_CAMERA_SC2331 is not set
+# default:
 # CONFIG_CAMERA_SC2336 is not set
+# default:
+# CONFIG_CAMERA_SC2337P is not set
 # default:
 # CONFIG_CAMERA_SP0A39 is not set
 # default:
 # CONFIG_CAMERA_STI2250 is not set
 # default:
-# CONFIG_CAMERA_PIVARIETY is not set
+# CONFIG_CAMERA_TC358743 is not set
 # default:
 # CONFIG_CAMERA_ARDUCAM_IMX500 is not set
+# default:
+# CONFIG_CAMERA_PIVARIETY is not set
 # end of Select and Set Camera Sensor
 # end of Camera Sensor Configuration
 
@@ -4077,15 +4099,6 @@ CONFIG_CAMERA_SENSOR_MOTOR_DETECT_METHOD_DYNAMIC_LINK=y
 # default:
 # CONFIG_CAMERA_SENSOR_MOTOR_DETECT_METHOD_STATIC_STORE is not set
 # end of Espressif Camera Sensors Configurations
-
-#
-# ESP H264 Configuration
-#
-# default:
-CONFIG_ESP_H264_DECODER_IRAM=y
-# default:
-# CONFIG_ESP_H264_DUAL_TASK is not set
-# end of ESP H264 Configuration
 
 #
 # Espressif Image Process Algorithm Configuration
@@ -4150,7 +4163,15 @@ CONFIG_ESP_VIDEO_DISABLE_MIPI_CSI_DRIVER_BACKUP_BUFFER=y
 # default:
 CONFIG_ESP_VIDEO_ENABLE_ISP_VIDEO_DEVICE=y
 # default:
+CONFIG_ESP_VIDEO_ISP_DEVICE_HIST_SAMPLING_RGB=y
+# default:
+# CONFIG_ESP_VIDEO_ISP_DEVICE_HIST_SAMPLING_YUV_Y is not set
+# default:
 # CONFIG_ESP_VIDEO_ENABLE_ISP_PIPELINE_CONTROLLER is not set
+# default:
+CONFIG_ESP_VIDEO_DISABLE_ISP_ERROR_INTERRUPT=y
+# default:
+# CONFIG_ESP_VIDEO_USE_CUSTOMIZED_ESP_H264_VERSION is not set
 
 #
 # Video Data Preprocessing
@@ -4229,7 +4250,35 @@ CONFIG_USB_OTG_SUPPORTED=y
 CONFIG_UVC_INTERVAL_ARRAY_SIZE=3
 # default:
 CONFIG_UVC_CHECK_PAYLOAD_HEADER_EOH=y
+# default:
+CONFIG_UVC_CHECK_PAYLOAD_HEADER_ERR=y
 # end of USB HOST UVC
+
+#
+# Camera Sensor (IMX add-on)
+#
+CONFIG_CAMERA_IMX219=y
+CONFIG_CAMERA_IMX219_AUTO_DETECT_MIPI_INTERFACE_SENSOR=y
+# default:
+CONFIG_CAMERA_IMX219_MIPI_IF_FORMAT_INDEX_DEFAULT=0
+# CONFIG_CAMERA_IMX708 is not set
+# end of Camera Sensor (IMX add-on)
+
+#
+# Camera Motor (IMX add-on)
+#
+# default:
+# CONFIG_CAM_MOTOR_DW9807 is not set
+# end of Camera Motor (IMX add-on)
+
+#
+# ESP H264 Configuration
+#
+# default:
+CONFIG_ESP_H264_DECODER_IRAM=y
+# default:
+# CONFIG_ESP_H264_DUAL_TASK is not set
+# end of ESP H264 Configuration
 # end of Component config
 
 # default:

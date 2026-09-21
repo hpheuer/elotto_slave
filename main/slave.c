@@ -72,7 +72,7 @@ static const char *TAG = "slave";
 /* ENTROPY IS PHOTONS, AND ONLY PHOTONS (user decision, 2026-07-26).
  *
  * The on-chip TRNG is removed from this firmware. This node measures its OWN
- * OV5647 — never one shared with the master, or the ÷√k combination would be
+ * OV5647 or IMX219 — never one shared with the master, or the ÷√k combination would be
  * counting one measurement twice — and if that camera stops delivering there is
  * nothing to fall back to by design. The node reports "E:<reason>" instead of a
  * z and the master reboots it. See sensor.h in the master repo for why. */
@@ -350,8 +350,9 @@ static esp_err_t diag_handler(httpd_req_t *req)
     camera_get_exposure(&exp_now, &gain_now);
     char buf[1280];
     int  pos = snprintf(buf, sizeof(buf),
-        "{\"role\":\"slave\",\"src\":\"camera-only\",\"cam_fault\":%s,"
+        "{\"role\":\"slave\",\"src\":\"camera-only\",\"cam_sensor\":\"%s\",\"cam_fault\":%s,"
         "\"measuring\":%s,\"baseline_mean\":%.4f,",
+        camera_sensor_name(),
         g_cam_fault ? "true" : "false", g_measuring ? "true" : "false",
         g_baseline_mean);
     pos += elotto_ota_status_json(buf + pos, sizeof(buf) - pos);
@@ -401,7 +402,7 @@ static esp_err_t root_handler(httpd_req_t *req)
         "<style>body{font-family:sans-serif;background:#0a2e0a;color:#eee;padding:24px}"
         "code{background:#00000055;padding:2px 6px;border-radius:4px}a{color:#90ee90}</style>"
         "<h2>elotto GCP slave</h2>"
-        "<p>Measures on its own OV5647; triggered by the master over UDP broadcast "
+        "<p>Measures on its own camera (OV5647 or IMX219); triggered by the master over UDP broadcast "
         "on port 5000 (docs/PLAN_NETWORK.md Phase C).</p>"
         "<ul>"
         "<li><a href='/diag'>/diag</a> &mdash; camera health, source, firmware</li>"
