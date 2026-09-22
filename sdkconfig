@@ -4101,6 +4101,15 @@ CONFIG_CAMERA_SENSOR_MOTOR_DETECT_METHOD_DYNAMIC_LINK=y
 # end of Espressif Camera Sensors Configurations
 
 #
+# ESP H264 Configuration
+#
+# default:
+CONFIG_ESP_H264_DECODER_IRAM=y
+# default:
+# CONFIG_ESP_H264_DUAL_TASK is not set
+# end of ESP H264 Configuration
+
+#
 # Espressif Image Process Algorithm Configuration
 #
 # default:
@@ -4270,15 +4279,6 @@ CONFIG_CAMERA_IMX219_MIPI_IF_FORMAT_INDEX_DEFAULT=0
 # default:
 # CONFIG_CAM_MOTOR_DW9807 is not set
 # end of Camera Motor (IMX add-on)
-
-#
-# ESP H264 Configuration
-#
-# default:
-CONFIG_ESP_H264_DECODER_IRAM=y
-# default:
-# CONFIG_ESP_H264_DUAL_TASK is not set
-# end of ESP H264 Configuration
 # end of Component config
 
 # default:
