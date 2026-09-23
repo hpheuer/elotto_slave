@@ -107,9 +107,12 @@ static volatile bool g_measuring     = false;   // refuses OTA mid-measurement
  * cannot send 'A' from inside a crash — and it is also the hole: the attended
  * gates (PHASE_READY, PHASE_POOL_CONFIRM) park longer than this with a session
  * genuinely open. Those are attended by definition, so the operator standing
- * at the rig is the guard there. Runs are 2..5 s and the sweep is ~10 s, so
- * 60 s never expires under a pass that is actually running. */
-#define SESSION_IDLE_MS  60000
+ * at the rig is the guard there. Runs are 0,5..5 s, the sweep ~10 s and the
+ * post-sweep settle pause 60 s, so
+ * 120 s never expires under a pass that is actually running. */
+#define SESSION_IDLE_MS  120000   /* ⚠ must exceed the master's post-sweep settle
+                                    * pause (CAL_SETTLE_AFTER_MS 60 s) — no M or K
+                                    * arrives during it [D87] */
 static volatile bool     g_session      = false;
 static volatile int64_t  g_session_t_us = 0;
 
@@ -625,10 +628,15 @@ static void link_task(void *arg)
                                        // being reconfigured
                 bool ok = camera_calibrate(budget, cal_abort_cb, s_cal);
                 g_measuring = false;
-                snprintf(r, sizeof(r), "OK:%lu,%lu,%.6f,%.3f,%c",
+                /* ,e0= is the exposure in force when the sweep began (step 0
+                 * re-measures it unchanged): the master compares it with the
+                 * choice to decide whether the settle pause is owed [D87]. */
+                snprintf(r, sizeof(r), "OK:%lu,%lu,%.6f,%.3f,%c,e0=%lu",
                          (unsigned long)s_cal->exposure, (unsigned long)s_cal->gain,
                          s_cal->bias, s_cal->mbit_per_sec,
-                         ok ? 'G' : 'U');
+                         ok ? 'G' : 'U',
+                         (unsigned long)(s_cal->nsteps > 0 ? s_cal->step[0].exposure : 0));
+                session_mark();     /* restart the idle clock: the settle pause follows */
                 TLOG("cal done: exposure=%lu gain=%lu %s (%lu ms, %d steps)\n",
                      (unsigned long)s_cal->exposure, (unsigned long)s_cal->gain,
                      ok ? "gated" : "NO gated setting -- kept previous",
