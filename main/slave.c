@@ -731,10 +731,10 @@ static void link_task(void *arg)
             camera_get_stats(&cs);
             /* ...plus this node's own image, tagged rather than positional so
              * the master's field-order parse cannot trip over it and an older
-             * master simply never looks. It ends up in the session CSV header:
-             * "all four nodes run the same code" is a policy, and on 2026-08-19
-             * it was not true (master built 10:57 -dirty, slaves 09:59) while
-             * the archive of that session recorded neither. */
+             * master simply never looks. The master shows it per node in
+             * /diagjson?all=1: "all four nodes run the same code" is a policy,
+             * and on 2026-08-19 it was not true (master built 10:57 -dirty,
+             * slaves 09:59). */
             const esp_app_desc_t *desc = esp_app_get_description();
             char sha[17] = {0};
             for (int i = 0; i < 8; i++)
