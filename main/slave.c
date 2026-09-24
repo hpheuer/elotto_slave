@@ -52,8 +52,6 @@ static const char *TAG = "slave";
 #define TLOG(fmt, ...) do { uint64_t _ms = esp_timer_get_time() / 1000; \
     printf("[%5llu.%03llu] " fmt, _ms / 1000, _ms % 1000, ##__VA_ARGS__); } while(0)
 
-#define SEGMENT_BITS  200      // 6 words + 8 bits, per z segment
-
 // Segments per run come FROM THE MASTER now (PLAN_4NODE Phase 5): 'B' and 'M'
 // carry the count, so a duplicated constant on each side cannot let the nodes
 // integrate different windows while every published number stays plausible.
