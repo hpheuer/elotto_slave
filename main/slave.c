@@ -327,7 +327,7 @@ static bool slave_busy(void) { return g_measuring || session_active(); }
 /* Drop the pre-window bits and wait for a fresh pair. false = did not settle,
  * in which case the RING WAS NOT DROPPED (the flush happens at a pair boundary)
  * and the caller must refuse rather than measure. */
-#define SLAVE_FLUSH_MS  500
+#define SLAVE_FLUSH_MS  700   /* two pairs now: one discarded [D105] */
 static bool ring_flush_ok(void)
 {
     camera_ring_flush(1);
