@@ -708,6 +708,13 @@ static void link_task(void *arg)
                 if (ws.win_sigma_samples > 0) {
                     size_t l = strlen(resp);
                     snprintf(resp + l, sizeof(resp) - l, ",wsig=%.4f", ws.win_sigma);
+                    /* ,ac= the lag-1..4 window autocorrelation z summed (D97):
+                     * unit normal per lag, so variance 4 under independence.
+                     * Per-lag detail stays in /camlog. */
+                    l = strlen(resp);
+                    snprintf(resp + l, sizeof(resp) - l, ",ac=%.3f",
+                             ws.win_ac_z[0] + ws.win_ac_z[1] +
+                             ws.win_ac_z[2] + ws.win_ac_z[3]);
                 }
                 /* Same instant, into this node's own ring (D64). The wire
                  * carries wsig and nothing else; raw_sigma, mean_px, autocorr
