@@ -669,6 +669,13 @@ static void link_task(void *arg)
                              ws.win_ac_z[0] + ws.win_ac_z[1] +
                              ws.win_ac_z[2] + ws.win_ac_z[3]);
                 }
+                /* ,cut= segments in h1: the halves are unequal, and the
+                 * master's in-window trend t needs both sizes to stay
+                 * bias-free. */
+                if (have_h) {
+                    size_t l = strlen(resp);
+                    snprintf(resp + l, sizeof(resp) - l, ",cut=%d", gcp_last_cut());
+                }
                 /* Same instant, into this node's own ring. The wire
                  * carries wsig and nothing else; raw_sigma, mean_px, autocorr
                  * and zero_diff stay here, and they are what says whether a
