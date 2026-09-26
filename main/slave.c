@@ -38,7 +38,7 @@
 
 static const char *TAG = "slave";
 
-#define TLOG(fmt,...) do { uint64_t _ms = esp_timer_get_time() / 1000; \
+#define TLOG(fmt, ...) do { uint64_t _ms = esp_timer_get_time() / 1000; \
     printf("[%5llu.%03llu] " fmt, _ms / 1000, _ms % 1000, ##__VA_ARGS__); } while(0)
 
 // Segments per run come FROM THE MASTER: 'B' and 'M' carry the count, so a
@@ -82,7 +82,7 @@ static volatile bool g_measuring     = false;   // refuses OTA mid-measurement
  * cannot send 'A' from inside a crash. */
 #define SESSION_IDLE_MS  120000   /* ⚠ must exceed the master's post-sweep settle
                                     * pause (CAL_SETTLE_AFTER_MS 60 s) — no M or K
-                                    * arrives during it  */
+                                    * arrives during it */
 static volatile bool     g_session      = false;
 static volatile int64_t  g_session_t_us = 0;
 
@@ -249,7 +249,7 @@ static void link_drain(void)
  * letter (and past the ',' for 'B'). */
 static int seg_from_cmd(const char *arg)
 {
-    int nseg = arg ? atoi(arg): 0;
+    int nseg = arg ? atoi(arg) : 0;
     if (nseg >= SEG_MIN && nseg <= SEG_MAX) return nseg;
     TLOG("no segment count on the wire -- falling back to %d (pre-Phase-5 master?)\n",
          CAM_SEGMENTS);
@@ -297,7 +297,7 @@ static bool slave_busy(void) { return g_measuring || session_active(); }
 /* Drop the pre-window bits and wait for a fresh pair. false = did not settle,
  * in which case the RING WAS NOT DROPPED (the flush happens at a pair boundary)
  * and the caller must refuse rather than measure. */
-#define SLAVE_FLUSH_MS  700   /* two pairs now: one discarded  */
+#define SLAVE_FLUSH_MS  700   /* two pairs now: one discarded */
 static bool ring_flush_ok(void)
 {
     camera_ring_flush(1);
@@ -318,7 +318,7 @@ static esp_err_t diag_handler(httpd_req_t *req)
         "{\"role\":\"slave\",\"src\":\"camera-only\",\"cam_sensor\":\"%s\",\"cam_fault\":%s,"
         "\"measuring\":%s,\"baseline_mean\":%.4f,",
         camera_sensor_name(),
-        g_cam_fault ? "true": "false", g_measuring ? "true": "false",
+        g_cam_fault ? "true" : "false", g_measuring ? "true" : "false",
         g_baseline_mean);
     pos += elotto_ota_status_json(buf + pos, sizeof(buf) - pos);
     /* ⚠ JSON has no NaN: "%.2f" of NAN emits the bare token `nan` and makes the
@@ -342,7 +342,7 @@ static esp_err_t diag_handler(httpd_req_t *req)
          * running on right now?". */
         "\"exposure\":%lu,\"gain\":%lu,"
         "\"autocorr\":[%.4f,%.4f,%.4f,%.4f]}}",
-        cs.ready ? "true": "false", (unsigned long long)cs.frame_pairs,
+        cs.ready ? "true" : "false", (unsigned long long)cs.frame_pairs,
         cs.bias, cs.sigma, cs.mean_pixel_level, cs.mbit_per_sec,
         cs.consume_mbit_per_sec, cs.zero_diff_frac,
         (unsigned long)cs.stuck_frame_count,
@@ -498,9 +498,9 @@ static void link_task(void *arg)
     s_sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (s_sock < 0) { ESP_LOGE(TAG, "socket() failed"); vTaskDelete(NULL); return; }
     struct sockaddr_in me = {
-.sin_family      = AF_INET,
-.sin_port        = htons(ELOTTO_LINK_CMD_PORT),
-.sin_addr.s_addr = htonl(INADDR_ANY),   /* also receives the broadcast */
+        .sin_family      = AF_INET,
+        .sin_port        = htons(ELOTTO_LINK_CMD_PORT),
+        .sin_addr.s_addr = htonl(INADDR_ANY),   /* also receives the broadcast */
     };
     if (bind(s_sock, (struct sockaddr *)&me, sizeof(me)) < 0) {
         ESP_LOGE(TAG, "bind(%d) failed", ELOTTO_LINK_CMD_PORT);
@@ -509,7 +509,7 @@ static void link_task(void *arg)
         return;
     }
     TLOG("GCP-Slave ready  UDP port %d  source=camera-only  streaming=%s\n",
-         ELOTTO_LINK_CMD_PORT, camera_is_ready() ? "yes": "NO");
+         ELOTTO_LINK_CMD_PORT, camera_is_ready() ? "yes" : "NO");
 
     char buf[ELOTTO_LINK_MAX];
     for (;;) {
@@ -554,7 +554,7 @@ static void link_task(void *arg)
             if (budget < 2000)   budget = 2000;
             if (budget > 120000) budget = 120000;
             const char *segp = strchr(cmd + 1, ',');
-            int cal_segs = segp ? atoi(segp + 1): 0;
+            int cal_segs = segp ? atoi(segp + 1) : 0;
             if (cal_segs < EL_SEG_MIN || cal_segs > EL_SEG_MAX) {
                 if (cal_segs != 0)
                     TLOG("cal: segment count %d out of [%d,%d] -- legacy bias bar\n",
@@ -575,24 +575,24 @@ static void link_task(void *arg)
                 // being dropped for a reason that has nothing to do with it.
                 snprintf(r, sizeof(r), "OK:0,0,0.500000,0.000,U");
                 TLOG("cal: no camera (%s) -- nothing to calibrate\n",
-                     s_cal ? "not streaming": "no PSRAM for the table");
+                     s_cal ? "not streaming" : "no PSRAM for the table");
             } else {
                 g_measuring = true;    // also refuses OTA while the sensor is
                                        // being reconfigured
                 bool ok = camera_calibrate(budget, cal_abort_cb, s_cal);
                 g_measuring = false;
-                /*,e0= is the exposure in force when the sweep began (step 0
+                /* ,e0= is the exposure in force when the sweep began (step 0
                  * re-measures it unchanged): the master compares it with the
                  * choice to decide whether the settle pause is owed. */
                 snprintf(r, sizeof(r), "OK:%lu,%lu,%.6f,%.3f,%c,e0=%lu",
                          (unsigned long)s_cal->exposure, (unsigned long)s_cal->gain,
                          s_cal->bias, s_cal->mbit_per_sec,
-                         ok ? 'G': 'U',
-                         (unsigned long)(s_cal->nsteps > 0 ? s_cal->step[0].exposure: 0));
+                         ok ? 'G' : 'U',
+                         (unsigned long)(s_cal->nsteps > 0 ? s_cal->step[0].exposure : 0));
                 session_mark();     /* restart the idle clock: the settle pause follows */
                 TLOG("cal done: exposure=%lu gain=%lu %s (%lu ms, %d steps)\n",
                      (unsigned long)s_cal->exposure, (unsigned long)s_cal->gain,
-                     ok ? "gated": "NO gated setting -- kept previous",
+                     ok ? "gated" : "NO gated setting -- kept previous",
                      (unsigned long)s_cal->elapsed_ms, s_cal->nsteps);
                 log_camera_stats("after-calibration");
             }
@@ -645,10 +645,10 @@ static void link_task(void *arg)
             } else {
                 snprintf(resp, sizeof(resp), "Z:%.6f", zraw);
             }
-            /*,wsig= is the camera's per-mini-run sigma over THIS window
+            /* ,wsig= is the camera's per-mini-run sigma over THIS window
              * and nothing else  — the number that says whether the bits
              * this z was built from were disturbed while they were taken.
-             * TAGGED and appended, like,cons= and,fw= on the D reply: the
+             * TAGGED and appended, like ,cons= and ,fw= on the D reply: the
              * master's positional parse for z_pre/h1/h2 counts commas from the
              * front and cannot trip over a field behind them, and a master too
              * old to look simply never does.
@@ -687,7 +687,7 @@ static void link_task(void *arg)
             // rather than only learning of a problem when a run fails.
             camera_stats_t cs;
             camera_get_stats(&cs);
-            /*...plus this node's own image, tagged rather than positional so
+            /* ...plus this node's own image, tagged rather than positional so
              * the master's field-order parse cannot trip over it and an older
              * master simply never looks. The master shows it per node in
              * /diagjson?all=1: "all four nodes run the same code" is a policy,
@@ -697,7 +697,7 @@ static void link_task(void *arg)
             for (int i = 0; i < 8; i++)
                 snprintf(sha + i * 2, 3, "%02x", desc->app_elf_sha256[i]);
             /*,raw= is the LSB pair. TAGGED and
-             * appended for the same reason,fw= is: a slave too old to send it
+             * appended for the same reason ,fw= is: a slave too old to send it
              * is simply absent rather than misread, and the positional parse
              * ahead of it cannot trip over it. */
             uint32_t dex = 0, dgn = 0;
