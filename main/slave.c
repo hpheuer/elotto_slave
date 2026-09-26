@@ -1,27 +1,16 @@
-/* GCP measurement slave — Phase C of docs/PLAN_NETWORK.md.
+/* GCP measurement slave.
  *
- * WHAT CHANGED IN PHASE C: the transport. This node used to be reachable only
- * over a UART1 crossover to the master (TX=GPIO14 / RX=GPIO15, 460800 baud);
- * it is now an Ethernet node that
- *   - answers the same 'P'/'B'/'M'/'D'/'A' commands over UDP, and
- *   - serves HTTP, so it can be updated over the wire like every other node.
+ * An Ethernet node that answers the 'P'/'B'/'M'/'D'/'A' commands over UDP and
+ * serves HTTP, so it can be updated over the wire like every other node.
  *
- * The HTTP server is not a convenience. With rollback armed, an app that cannot
- * be reached over the network is rolled back by design on the next boot
- * (PLAN_NETWORK §3a), so a slave without a webserver could not be installed at
- * all. That is exactly why the slave has been running the recovery updater
- * since Phase A.
+ * With rollback armed, an app that cannot be reached over the network is rolled
+ * back by design on the next boot, so the slave must keep its webserver.
  *
- * The measurement code was held byte-identical to the UART era through Phase C,
- * deliberately: that phase was an A/B of the transport, so nothing that could
- * move pair_r or sigma was allowed to change with it.
- *
- * It has since MOVED rather than changed. gcp_zscore_raw() and noise_word()
- * now live in elotto/components/elotto_gcp, compiled into this firmware and the
- * master's from one definition, so the two cannot disagree about how a z is
- * computed — the combine assumes they agree. The arithmetic that crossed Phase C
- * unchanged is unchanged still, down to the normalisation constant; only the
- * abort poll is local, passed in as gcp_yield_cb().
+ * The measurement primitive (gcp_zscore_raw) lives in
+ * elotto/components/elotto_gcp, compiled into this firmware and the master's
+ * from one definition, so the two cannot disagree about how a z is computed —
+ * the combine assumes they agree. Only the abort poll is local, passed in as
+ * gcp_yield_cb().
  */
 #include <math.h>
 #include <stdio.h>
@@ -49,19 +38,17 @@
 
 static const char *TAG = "slave";
 
-#define TLOG(fmt, ...) do { uint64_t _ms = esp_timer_get_time() / 1000; \
+#define TLOG(fmt,...) do { uint64_t _ms = esp_timer_get_time() / 1000; \
     printf("[%5llu.%03llu] " fmt, _ms / 1000, _ms % 1000, ##__VA_ARGS__); } while(0)
 
-// Segments per run come FROM THE MASTER now (PLAN_4NODE Phase 5): 'B' and 'M'
-// carry the count, so a duplicated constant on each side cannot let the nodes
-// integrate different windows while every published number stays plausible.
+// Segments per run come FROM THE MASTER: 'B' and 'M' carry the count, so a
+// duplicated constant on each side cannot let the nodes integrate different
+// windows while every published number stays plausible.
 //
-// CAM_SEGMENTS remains only as the fallback for a master that sends no count —
-// i.e. a pre-Phase-5 image. A fallback is not a second source of truth: if it
-// is ever used the console says so.
-// 1.6 Mbit/run: ~0,47 s at the ~3,4 Mbit/s this was written for, ~0,28 s at the
-// 5,71 Mbit/s the node reaches since 2026-08-18. Only the bit count is a
-// contract; the duration is informational and moves with the extraction rate.
+// CAM_SEGMENTS remains only as the fallback for a master that sends no count.
+// A fallback is not a second source of truth: if it is ever used the console
+// says so. Only the bit count is a contract; the duration is informational and
+// moves with the extraction rate.
 #define CAM_SEGMENTS  8000
 /* One definition, in the wire header both firmwares compile (elotto_link.h). */
 #define SEG_MIN     EL_SEG_MIN
@@ -80,17 +67,7 @@ static double        g_baseline_mean = 0.0;
 static volatile bool g_abort         = false;
 static volatile bool g_measuring     = false;   // refuses OTA mid-measurement
 
-/* ── The session latch (D64) ──────────────────────────────────────────
- *
- * g_measuring is true for the ~2 s of an actual window and nothing else, so
- * for years `POST /expose` was refused during a measurement and WIDE OPEN
- * during the 0,8 s gap between two of them — while the node's own HTML page
- * claimed "409 while measuring", which an operator reads as "409 during a
- * session". On 2026-08-31 a parameterless /expose landed on slave2 in the
- * middle of a running pass: it rewrote the exposure to its own value (no
- * harm) and called camera_stats_reset() (the block's camera statistics
- * restarted mid-block). A version with ?exp= would have moved the operating
- * point under a session that had already certified a rung.
+/* ── The session latch  ──────────────────────────────────────────
  *
  * The node has no session state of its own, so it derives one from the only
  * evidence it has — the master's traffic:
@@ -102,15 +79,10 @@ static volatile bool g_measuring     = false;   // refuses OTA mid-measurement
  * button sends, and locking every slave because someone pressed "probe" would
  * be a worse failure than the one this fixes.
  * ⚠ The idle release is what makes a master reboot self-healing — the master
- * cannot send 'A' from inside a crash — and it is also the hole: the attended
- * gates (PHASE_READY, PHASE_POOL_CONFIRM) park longer than this with a session
- * genuinely open. Those are attended by definition, so the operator standing
- * at the rig is the guard there. Runs are 0,5..5 s, the sweep ~10 s and the
- * post-sweep settle pause 60 s, so
- * 120 s never expires under a pass that is actually running. */
+ * cannot send 'A' from inside a crash. */
 #define SESSION_IDLE_MS  120000   /* ⚠ must exceed the master's post-sweep settle
                                     * pause (CAL_SETTLE_AFTER_MS 60 s) — no M or K
-                                    * arrives during it [D87] */
+                                    * arrives during it  */
 static volatile bool     g_session      = false;
 static volatile int64_t  g_session_t_us = 0;
 
@@ -256,10 +228,8 @@ static void link_poll_abort(void)
     link_reply(&from, seq, "OK");
 }
 
-/* Drop whatever is queued. Runs when a session starts ('B'), mirroring the
- * uart_flush_input() the UART path did there: a leftover 'A' from the session
- * that was aborted would otherwise be consumed by the first baseline run and
- * abort this one too. */
+/* Drop whatever is queued. A leftover 'A' from an aborted session would
+ * otherwise be consumed by the next run and abort it too. */
 static void link_drain(void)
 {
     char buf[ELOTTO_LINK_MAX];
@@ -272,14 +242,14 @@ static void link_drain(void)
     }
 }
 
-/* ── Measurement (unchanged from the UART era — see file header) ──────── */
+/* ── Measurement ─────────────────────────────────────────────────────── */
 
 /* Segment count for this run: what the master asked for, or this node's own
  * default if the command carried none. `arg` points just past the command
  * letter (and past the ',' for 'B'). */
 static int seg_from_cmd(const char *arg)
 {
-    int nseg = arg ? atoi(arg) : 0;
+    int nseg = arg ? atoi(arg): 0;
     if (nseg >= SEG_MIN && nseg <= SEG_MAX) return nseg;
     TLOG("no segment count on the wire -- falling back to %d (pre-Phase-5 master?)\n",
          CAM_SEGMENTS);
@@ -318,16 +288,16 @@ static bool gcp_zscore_pre_ok(int nseg, double *out,
 /* ── HTTP: own /diag, plus the shared update endpoints ────────────────── */
 
 /* The predicate every sensor-touching handler passes down. It is deliberately
- * WIDER than g_measuring: see the session latch above for what that cost.
- * ⚠ OTA keeps using g_measuring, not this — refusing an update for a whole
- * session would break the documented "abort, then flash" workflow, and an OTA
- * between two runs is merely wasteful, not corrupting. */
+ * WIDER than g_measuring: it also covers the whole session (see the latch
+ * above). ⚠ OTA keeps using g_measuring, not this — refusing an update for a
+ * whole session would break the documented "abort, then flash" workflow, and an
+ * OTA between two runs is merely wasteful, not corrupting. */
 static bool slave_busy(void) { return g_measuring || session_active(); }
 
 /* Drop the pre-window bits and wait for a fresh pair. false = did not settle,
  * in which case the RING WAS NOT DROPPED (the flush happens at a pair boundary)
  * and the caller must refuse rather than measure. */
-#define SLAVE_FLUSH_MS  700   /* two pairs now: one discarded [D105] */
+#define SLAVE_FLUSH_MS  700   /* two pairs now: one discarded  */
 static bool ring_flush_ok(void)
 {
     camera_ring_flush(1);
@@ -348,7 +318,7 @@ static esp_err_t diag_handler(httpd_req_t *req)
         "{\"role\":\"slave\",\"src\":\"camera-only\",\"cam_sensor\":\"%s\",\"cam_fault\":%s,"
         "\"measuring\":%s,\"baseline_mean\":%.4f,",
         camera_sensor_name(),
-        g_cam_fault ? "true" : "false", g_measuring ? "true" : "false",
+        g_cam_fault ? "true": "false", g_measuring ? "true": "false",
         g_baseline_mean);
     pos += elotto_ota_status_json(buf + pos, sizeof(buf) - pos);
     /* ⚠ JSON has no NaN: "%.2f" of NAN emits the bare token `nan` and makes the
@@ -360,7 +330,7 @@ static esp_err_t diag_handler(httpd_req_t *req)
         ",\"cam\":{\"ready\":%s,\"frame_pairs\":%llu,\"bias\":%.6f,\"sigma\":%.4f,"
         "\"mean_pixel\":%.2f,\"mbit_s\":%.3f,\"consume_mbit_s\":%.3f,"
         "\"zero_diff\":%.4f,\"stuck_frames\":%lu,"
-        /* Same bits as bias/sigma above `[D65]`. See cam_raw_t in extract.h. */
+        /* Same bits as bias/sigma above. See cam_raw_t in extract.h. */
         "\"raw_bias\":%.6f,\"raw_sigma\":%.4f,\"raw_sigma_n\":%d,"
         "\"raw_runs_z\":%.2f,\"die_temp\":%s,"
         "\"drops\":%lu,\"waits\":%lu,\"stalls\":%lu,"
@@ -369,11 +339,10 @@ static esp_err_t diag_handler(httpd_req_t *req)
         "\"ms_pair\":%.2f,\"ms_wait\":%.2f,\"ms_extract\":%.2f,\"ms_rest\":%.2f,"
         /* exposure/gain are the parameters actually being tuned, so a
          * diagnostics view without them cannot answer "what is this node
-         * running on right now?" -- the master reported them all along and the
-         * slaves did not. */
+         * running on right now?". */
         "\"exposure\":%lu,\"gain\":%lu,"
         "\"autocorr\":[%.4f,%.4f,%.4f,%.4f]}}",
-        cs.ready ? "true" : "false", (unsigned long long)cs.frame_pairs,
+        cs.ready ? "true": "false", (unsigned long long)cs.frame_pairs,
         cs.bias, cs.sigma, cs.mean_pixel_level, cs.mbit_per_sec,
         cs.consume_mbit_per_sec, cs.zero_diff_frac,
         (unsigned long)cs.stuck_frame_count,
@@ -413,7 +382,7 @@ static esp_err_t root_handler(httpd_req_t *req)
         "<li><a href='/otainfo'>/otainfo</a> &mdash; image version / slot / state</li>"
         "<li><code>POST /expose?exp=&lt;lines&gt;&amp;gain=&lt;g&gt;</code> &mdash; set this "
         "camera's operating point; driven from the master's /diag page. 409 for the whole "
-        "session, not merely during a window (D64)</li>"
+        "session, not merely during a window </li>"
         "<li><code>POST /update</code> &mdash; refused with 409 while measuring</li>"
         "</ul>";
     httpd_resp_set_type(req, "text/html");
@@ -423,10 +392,9 @@ static esp_err_t root_handler(httpd_req_t *req)
 
 /* GET /calibrate — this node's whole last exposure sweep, per candidate.
  *
- * The sweep already ran and already sat in PSRAM; until now nothing could read
- * it. Only the CHOSEN rung travels on the wire (`OK:<exp>,...`), by design, so
- * the master cannot answer "is this node's sensor worse, or is it just darker?"
- * — that needs the whole ladder from the node itself. Same payload shape as the
+ * Only the CHOSEN rung travels on the wire (`OK:<exp>,...`), by design, so the
+ * master cannot answer "is this node's sensor worse, or is it just darker?" —
+ * that needs the whole ladder from the node itself. Same payload shape as the
  * master's /calibrate, because the serialiser is shared.
  *
  * Empty until a 'K' has been answered: a node that has never calibrated has no
@@ -447,7 +415,7 @@ static esp_err_t expose_handler(httpd_req_t *req)
     return camera_expose_handle(req, slave_busy());
 }
 
-/* GET /camlog — this node's per-window camera log (D64). No busy predicate:
+/* GET /camlog — this node's per-window camera log. No busy predicate:
  * it only reads a ring, and the whole point is to be pullable DURING a session
  * while the disturbance is still in it. */
 static esp_err_t camlog_handler(httpd_req_t *req)
@@ -463,10 +431,7 @@ static esp_err_t linearity_handler(httpd_req_t *req)
     return camera_linearity_handle(req, slave_busy());
 }
 
-/* GET /camtest — the extraction self-test, on this node's own silicon. The
- * handler was shared from the start and only the master ever registered it, so
- * "all four run the same extractor" could be asserted on one board and checked
- * on none of the others. */
+/* GET /camtest — the extraction self-test, on this node's own silicon. */
 static esp_err_t camtest_handler(httpd_req_t *req)
 {
     return camera_selftest_handle(req, slave_busy());
@@ -476,9 +441,6 @@ static httpd_handle_t start_webserver(void)
 {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.stack_size        = 8192;
-    /* Registration past the cap fails and the return value is checked nowhere,
-     * so an endpoint would just 404 silently — the same trap the master's
-     * comment documents. Raised with headroom. /specdump deleted with D53. */
     /* ⚠ The registration return value is unchecked here exactly as on the
      * master, so an overflow shows up as a 404 and not as an error: 7 here +
      * 5 from elotto_ota = 12. Raise this BEFORE adding a thirteenth. */
@@ -507,9 +469,8 @@ static httpd_handle_t start_webserver(void)
 }
 
 /* ── Command loop ─────────────────────────────────────────────────────────
- * Protocol, unchanged from the UART era; only the framing around it is new
- * (see components/elotto_link/include/elotto_link.h):
- *   P        → OK                  (discovery, was the wired ping)
+ * Protocol (see components/elotto_link/include/elotto_link.h):
+ *   P        → OK                  (discovery)
  *   K<ms>    → OK:exp,gain,bias,mbit_s,<G|U>        (calibrate the camera)
  *   B<n>,<s> → OK                  (baseline, n runs of s segments each)
  *   M<s>     → Z:<float>            (measure s segments)
@@ -517,9 +478,6 @@ static httpd_handle_t start_webserver(void)
  *   D        → D:ready,bias,sigma,mbit_s,stalls,stuck
  *   A        → OK                  (abort)
  *   R        → OK, then reboot     (ordered after a camera fault)
- *
- * The segment counts on 'B'/'M' are the Phase 5 addition; 'K' is Task 1 of
- * docs/PLAN.md. Everything else is unchanged from the UART era.
  */
 
 /* Abort poll for the calibration sweep. The sweep blocks this task for tens of
@@ -536,13 +494,13 @@ static void link_task(void *arg)
 {
     // This task IS the entropy consumer. The camera extraction task is
     // CPU-hungry, so a consumer at or below its priority starves the producer
-    // and a run takes 5.1 s instead of 0.47 s (see camera.h).
+    // (see camera.h).
     s_sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (s_sock < 0) { ESP_LOGE(TAG, "socket() failed"); vTaskDelete(NULL); return; }
     struct sockaddr_in me = {
-        .sin_family      = AF_INET,
-        .sin_port        = htons(ELOTTO_LINK_CMD_PORT),
-        .sin_addr.s_addr = htonl(INADDR_ANY),   /* also receives the broadcast */
+.sin_family      = AF_INET,
+.sin_port        = htons(ELOTTO_LINK_CMD_PORT),
+.sin_addr.s_addr = htonl(INADDR_ANY),   /* also receives the broadcast */
     };
     if (bind(s_sock, (struct sockaddr *)&me, sizeof(me)) < 0) {
         ESP_LOGE(TAG, "bind(%d) failed", ELOTTO_LINK_CMD_PORT);
@@ -551,7 +509,7 @@ static void link_task(void *arg)
         return;
     }
     TLOG("GCP-Slave ready  UDP port %d  source=camera-only  streaming=%s\n",
-         ELOTTO_LINK_CMD_PORT, camera_is_ready() ? "yes" : "NO");
+         ELOTTO_LINK_CMD_PORT, camera_is_ready() ? "yes": "NO");
 
     char buf[ELOTTO_LINK_MAX];
     for (;;) {
@@ -576,30 +534,27 @@ static void link_task(void *arg)
             TLOG("discovery from %s -> OK\n", inet_ntoa(from.sin_addr));
 
         } else if (cmd[0] == 'K') {
-            /* Camera calibration (docs/PLAN.md Task 1). The sweep itself lives
-             * in the shared elotto_camera component, so this node and the master
-             * run byte-identical logic and cannot disagree about what a
-             * calibrated camera is — the same reason the extraction pipeline is
-             * shared rather than duplicated.
+            /* Camera calibration. The sweep itself lives in the shared
+             * elotto_camera component, so this node and the master run
+             * byte-identical logic and cannot disagree about what a calibrated
+             * camera is — the same reason the extraction pipeline is shared
+             * rather than duplicated.
              *
-             * This node picks its OWN setting and will not match the master's.
-             * That is correct: the cameras are physically different units, which
-             * is precisely why one measured cleaner than the other at identical
-             * settings. What must still be shared is the segment count per run,
-             * and that travels on the wire. */
+             * This node picks its OWN setting and will not match the master's:
+             * the cameras are physically different units. What must still be
+             * shared is the segment count per run, and that travels on the
+             * wire. */
             /* "K<budget_ms>[,<segments>]". The segment count scales the bias
-             * gate (camera_cal_set_z_scale): the same bias is a 1,5-z offset at
-             * 26087 segments and a 3,3-z one at 130435, so a node that guessed
-             * would apply a different bar to its own camera than its peers do.
-             * A master too old to send it leaves the legacy fixed bar in force,
-             * which is logged loudly here — tolerable ONLY because this decides
-             * an exposure rung and never enters a combine, unlike the segment
-             * count on 'B'/'M'. */
+             * gate (camera_cal_set_z_scale), so a node that guessed would apply
+             * a different bar to its own camera than its peers do. If the count
+             * is absent the fixed bar stays in force, which is logged loudly
+             * here — tolerable ONLY because this decides an exposure rung and
+             * never enters a combine, unlike the segment count on 'B'/'M'. */
             int budget = atoi(cmd + 1);
             if (budget < 2000)   budget = 2000;
             if (budget > 120000) budget = 120000;
             const char *segp = strchr(cmd + 1, ',');
-            int cal_segs = segp ? atoi(segp + 1) : 0;
+            int cal_segs = segp ? atoi(segp + 1): 0;
             if (cal_segs < EL_SEG_MIN || cal_segs > EL_SEG_MAX) {
                 if (cal_segs != 0)
                     TLOG("cal: segment count %d out of [%d,%d] -- legacy bias bar\n",
@@ -620,32 +575,32 @@ static void link_task(void *arg)
                 // being dropped for a reason that has nothing to do with it.
                 snprintf(r, sizeof(r), "OK:0,0,0.500000,0.000,U");
                 TLOG("cal: no camera (%s) -- nothing to calibrate\n",
-                     s_cal ? "not streaming" : "no PSRAM for the table");
+                     s_cal ? "not streaming": "no PSRAM for the table");
             } else {
                 g_measuring = true;    // also refuses OTA while the sensor is
                                        // being reconfigured
                 bool ok = camera_calibrate(budget, cal_abort_cb, s_cal);
                 g_measuring = false;
-                /* ,e0= is the exposure in force when the sweep began (step 0
+                /*,e0= is the exposure in force when the sweep began (step 0
                  * re-measures it unchanged): the master compares it with the
-                 * choice to decide whether the settle pause is owed [D87]. */
+                 * choice to decide whether the settle pause is owed. */
                 snprintf(r, sizeof(r), "OK:%lu,%lu,%.6f,%.3f,%c,e0=%lu",
                          (unsigned long)s_cal->exposure, (unsigned long)s_cal->gain,
                          s_cal->bias, s_cal->mbit_per_sec,
-                         ok ? 'G' : 'U',
-                         (unsigned long)(s_cal->nsteps > 0 ? s_cal->step[0].exposure : 0));
+                         ok ? 'G': 'U',
+                         (unsigned long)(s_cal->nsteps > 0 ? s_cal->step[0].exposure: 0));
                 session_mark();     /* restart the idle clock: the settle pause follows */
                 TLOG("cal done: exposure=%lu gain=%lu %s (%lu ms, %d steps)\n",
                      (unsigned long)s_cal->exposure, (unsigned long)s_cal->gain,
-                     ok ? "gated" : "NO gated setting -- kept previous",
+                     ok ? "gated": "NO gated setting -- kept previous",
                      (unsigned long)s_cal->elapsed_ms, s_cal->nsteps);
                 log_camera_stats("after-calibration");
             }
             link_reply(&from, seq, r);
 
         } else if (cmd[0] == 'B') {
-            /* Phase 1 baseline is deleted (D48). A master that still sends B
-             * is the wrong image; refuse rather than measure. */
+            /* No baseline phase: a master that still sends B is the wrong
+             * image; refuse rather than measure. */
             link_reply(&from, seq, "E:no baseline");
 
         } else if (cmd[0] == 'M') {
@@ -653,13 +608,11 @@ static void link_task(void *arg)
             g_abort = false;
             g_cam_fault = false;
             g_measuring = true;
-            /* Same per-item ring flush the master does (2026-08-19). Nothing
-             * consumes the ring between runs, so it is FULL when a window opens
-             * and the first ~524288 bits of the run were captured before the
-             * item existed. The master settled its own ring long before this
-             * and the slaves did not, so three of four arms carried pre-window
-             * bits into every measurement. Statistics are untouched — this is
-             * camera_ring_flush(), not camera_stats_reset(). */
+            /* Same per-item ring flush the master does. Nothing consumes the
+             * ring between runs, so it is FULL when a window opens and the
+             * first ~524288 bits of the run were captured before the item
+             * existed. Statistics are untouched — this is camera_ring_flush(),
+             * not camera_stats_reset(). */
             g_measuring = false;
             if (!ring_flush_ok()) {
                 /* ⚠ Answer with a refusal, never with a z. A timed-out flush
@@ -686,16 +639,16 @@ static void link_task(void *arg)
             } else if (!ok) {
                 snprintf(resp, sizeof(resp), "V:aborted");
             } else if (have_h) {
-                /* Z:<z>,<h1>,<h2> (D65). One stream; halves of the same window. */
+                /* Z:<z>,<h1>,<h2>. One stream; halves of the same window. */
                 snprintf(resp, sizeof(resp), "Z:%.6f,%.6f,%.6f",
                          zraw, zh1, zh2);
             } else {
                 snprintf(resp, sizeof(resp), "Z:%.6f", zraw);
             }
-            /* ,wsig= is the camera's per-mini-run sigma over THIS window
-             * and nothing else (D62) — the number that says whether the bits
+            /*,wsig= is the camera's per-mini-run sigma over THIS window
+             * and nothing else  — the number that says whether the bits
              * this z was built from were disturbed while they were taken.
-             * TAGGED and appended, like ,cons= and ,fw= on the D reply: the
+             * TAGGED and appended, like,cons= and,fw= on the D reply: the
              * master's positional parse for z_pre/h1/h2 counts commas from the
              * front and cannot trip over a field behind them, and a master too
              * old to look simply never does.
@@ -708,7 +661,7 @@ static void link_task(void *arg)
                 if (ws.win_sigma_samples > 0) {
                     size_t l = strlen(resp);
                     snprintf(resp + l, sizeof(resp) - l, ",wsig=%.4f", ws.win_sigma);
-                    /* ,ac= the lag-1..4 window autocorrelation z summed (D97):
+                    /*,ac= the lag-1..4 window autocorrelation z summed:
                      * unit normal per lag, so variance 4 under independence.
                      * Per-lag detail stays in /camlog. */
                     l = strlen(resp);
@@ -716,7 +669,7 @@ static void link_task(void *arg)
                              ws.win_ac_z[0] + ws.win_ac_z[1] +
                              ws.win_ac_z[2] + ws.win_ac_z[3]);
                 }
-                /* Same instant, into this node's own ring (D64). The wire
+                /* Same instant, into this node's own ring. The wire
                  * carries wsig and nothing else; raw_sigma, mean_px, autocorr
                  * and zero_diff stay here, and they are what says whether a
                  * disturbed window was the light, the sensor or neither.
@@ -734,28 +687,26 @@ static void link_task(void *arg)
             // rather than only learning of a problem when a run fails.
             camera_stats_t cs;
             camera_get_stats(&cs);
-            /* ...plus this node's own image, tagged rather than positional so
+            /*...plus this node's own image, tagged rather than positional so
              * the master's field-order parse cannot trip over it and an older
              * master simply never looks. The master shows it per node in
              * /diagjson?all=1: "all four nodes run the same code" is a policy,
-             * and on 2026-08-19 it was not true (master built 10:57 -dirty,
-             * slaves 09:59). */
+             * not a fact. */
             const esp_app_desc_t *desc = esp_app_get_description();
             char sha[17] = {0};
             for (int i = 0; i < 8; i++)
                 snprintf(sha + i * 2, 3, "%02x", desc->app_elf_sha256[i]);
-            /* ,raw= is the LSB pair (2026-08-26, D43). TAGGED and
-             * appended for the same reason ,fw= is: a slave too old to send it
+            /*,raw= is the LSB pair. TAGGED and
+             * appended for the same reason,fw= is: a slave too old to send it
              * is simply absent rather than misread, and the positional parse
              * ahead of it cannot trip over it. */
             uint32_t dex = 0, dgn = 0;
             camera_get_exposure(&dex, &dgn);
-            /* ,px= is the mean raw pixel level (2026-08-28). Tagged and
-             * appended like every field after the positional six, so a master
-             * too old to look simply never does. The master stamps it into
-             * LoopStat.cam_px at each block close: it is the covariate that
-             * separates a light change from a sensor change, and until now the
-             * only place it existed was a log line and a live /diag read. */
+            /*,px= is the mean raw pixel level. Tagged and appended like every
+             * field after the positional six, so a master too old to look
+             * simply never does. The master stamps it into LoopStat.cam_px at
+             * each block close: it is the covariate that separates a light
+             * change from a sensor change. */
             char r[256];
             snprintf(r, sizeof(r),
                      "D:%d,%.6f,%.4f,%.3f,%lu,%lu,fw=%s,raw=%.6f,%.4f,exp=%lu,%lu,t=%.2f,px=%.2f"
@@ -862,9 +813,7 @@ void app_main(void)
     // (must outrank ELOTTO_CAM_TASK_PRIO) and its stack has to hold the socket
     // path plus float formatting, neither of which app_main's defaults promise.
     // PINNED off the extraction core for the same reason the master pins its
-    // session task -- see ELOTTO_CAM_TASK_CORE in camera.h. This one is created
-    // once at boot rather than per session, so it never showed the master's
-    // per-session flip; that makes it luck holding, not a guarantee.
+    // session task -- see ELOTTO_CAM_TASK_CORE in camera.h.
     xTaskCreatePinnedToCore(link_task, "link", 6144, NULL,
                             ELOTTO_CAM_TASK_PRIO + 1, NULL,
                             ELOTTO_CAM_CONSUMER_CORE);
