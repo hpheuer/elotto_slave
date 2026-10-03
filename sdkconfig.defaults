@@ -31,13 +31,14 @@ CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_HEX=y
 CONFIG_SPIRAM_SPEED_200M=y
 
-# Sensor driver. The MODE is load-bearing and must match the master's: every
-# gate was measured at RAW8 800x800 @ 50 fps.
+# Sensor driver. An OV5647 streams RAW10 1920x1080 @ 30 fps, unbinned, so a
+# dark OV keeps the full per-pixel readout noise on 10-bit steps (RAW8 is 4x
+# coarser: in the dark its LSB is biased and over-dispersed).
 # ⚠ The exposure is not fixed here -- this node sweeps its own ladder every
 # block and keeps the rung it certifies, which is not the master's.
 CONFIG_CAMERA_OV5647=y
-CONFIG_CAMERA_OV5647_MIPI_RAW8_800X800_50FPS=y
-CONFIG_CAMERA_OV5647_MIPI_DEFAULT_FMT_RAW8_800X800_50FPS=y
+CONFIG_CAMERA_OV5647_MIPI_RAW10_1920X1080_30FPS=y
+CONFIG_CAMERA_OV5647_MIPI_DEFAULT_FMT_RAW10_1920X1080_30FPS=y
 CONFIG_CAMERA_IMX219=y
 CONFIG_CAMERA_IMX219_AUTO_DETECT_MIPI_INTERFACE_SENSOR=y
 CONFIG_CAMERA_IMX708=n
