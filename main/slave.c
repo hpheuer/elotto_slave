@@ -54,7 +54,7 @@ static const char *TAG = "slave";
 #define SEG_MIN     EL_SEG_MIN
 #define SEG_MAX     EL_SEG_MAX
 
-/* Entropy is photons from this node's own camera. Camera stall → E:<reason>. */
+/* Entropy is the readout noise of this node's own camera. Camera stall → E:<reason>. */
 static volatile bool g_cam_fault = false;   // camera died during the current run
 
 /* The calibration sweep's table (~1.2 KB). PSRAM and allocated once: the camera
@@ -169,7 +169,7 @@ static void log_camera_stats(const char *why)
     // mean_pixel is the light-leak check (must sit at the black floor) and the
     // autocorrelations reveal flicker: a mains-frequency leak would put a global
     // frame-to-frame intensity swing into every diff, correlating pixels that
-    // should be independent. Both are needed to tell a light problem apart from
+    // should be independent. Both are needed to tell a light leak apart from
     // sensor/ISP variation.
     TLOG("cam[%s] ready=%d pairs=%llu mbit_s=%.3f stalls=%lu waits=%lu drops=%lu "
          "stuck=%lu bias=%.6f sigma=%.4f mean_px=%.2f zero_diff=%.4f "
@@ -374,8 +374,8 @@ static esp_err_t root_handler(httpd_req_t *req)
         "per-window sigma, LSB sigma, mean_px, autocorr. Readable DURING a session, "
         "and the only place a disturbance can still be located in time</li>"
         "<li><a href='/calibrate'>/calibrate</a> &mdash; this node's whole last exposure sweep</li>"
-        "<li><a href='/linearity'>/linearity?exp=32,64,128,256</a> &mdash; steady light "
-        "doubles mean_px when the exposure doubles; flickering light does not. Restores the "
+        "<li><a href='/linearity'>/linearity?exp=32,64,128,256</a> &mdash; mean_px per "
+        "exposure; a light leak makes it grow with the exposure. Restores the "
         "entry exposure. 409 for the whole session</li>"
         "<li><a href='/camtest'>/camtest</a> &mdash; word-wise extractor against the byte-wise "
         "reference, on this node's silicon. 409 for the whole session</li>"
@@ -405,8 +405,8 @@ static esp_err_t calibrate_handler(httpd_req_t *req)
 }
 
 /* POST /expose?exp=<lines>[&gain=<g>] — set this node's operating point by hand,
- * so the master's /diag page can tune each camera against a live mean_px while
- * the physical light is adjusted. Shared implementation (camera.h): the master
+ * so the master's /diag page can try an operating point against a live
+ * mean_px. Shared implementation (camera.h): the master
  * serves the same path for its own sensor, and four nodes must not disagree
  * about clamps or read-back. Refused while measuring, via the same predicate
  * that refuses OTA. */
@@ -423,7 +423,7 @@ static esp_err_t camlog_handler(httpd_req_t *req)
     return camera_winlog_send_json(req);
 }
 
-/* GET /linearity — steady light or flickering light, in one request. Drives
+/* GET /linearity — mean_px across an exposure ladder, in one request. Drives
  * the exposure registers, so it is refused for the whole session, not just
  * during a window. */
 static esp_err_t linearity_handler(httpd_req_t *req)
@@ -679,7 +679,7 @@ static void link_task(void *arg)
                 /* Same instant, into this node's own ring. The wire
                  * carries wsig and nothing else; raw_sigma, mean_px, autocorr
                  * and zero_diff stay here, and they are what says whether a
-                 * disturbed window was the light, the sensor or neither.
+                 * disturbed window was a light leak, the sensor or neither.
                  * Tagged with the sequence of the 'M' being answered: the
                  * master can line its results[] up against this without the
                  * two needing a shared clock.
@@ -713,7 +713,7 @@ static void link_task(void *arg)
              * field after the positional six, so a master too old to look
              * simply never does. The master stamps it into LoopStat.cam_px at
              * each block close: it is the covariate that separates a light
-             * change from a sensor change. */
+             * leak from a sensor change. */
             char r[256];
             snprintf(r, sizeof(r),
                      "D:%d,%.6f,%.4f,%.3f,%lu,%lu,fw=%s,raw=%.6f,%.4f,exp=%lu,%lu,t=%.2f,px=%.2f"
@@ -742,7 +742,7 @@ static void link_task(void *arg)
         } else if (cmd[0] == 'R') {
             /* Reboot, ordered by the master after this node reported a camera
              * fault. There is no substitute source to limp along on, so a node
-             * that cannot see photons is not an instrument — restarting is the
+             * that delivers no camera bits is not an instrument — restarting is the
              * one recovery software has, since the camera is brought up in
              * app_main. Answer FIRST so the master's socket does not sit on a
              * reply that the restart would eat, then give the datagram a moment

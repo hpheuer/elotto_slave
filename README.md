@@ -21,13 +21,12 @@ on per-block combined σ and the full pairwise matrix, never on one correlation 
 | **[Grok](https://x.ai)** (xAI) | Co-author — implementation, debugging, live OTA validation, and docs (Grok Build) |
 
 **Its own source, never a shared one.** This node has its **own camera** (OV5647 or IMX219) on
-its CSI connector; entropy is photon shot + read noise from non-overlapping frame pairs. Sharing
+its CSI connector; entropy is its readout noise in total darkness, from non-overlapping frame pairs. Sharing
 one camera across nodes would make their measurements identical by construction and the √k gain
 fictional. The firmware probes both chips and binds whichever answers (`GET /diag` `cam_sensor`).
 
-⚠ **The enclosure is LIT, not dark.** Photons are what does the whitening, and the dark end of the
-exposure ladder is gated off for exactly that reason — on this rig exposures 4 and 8 fail to
-certify while 16…128 pass. If rungs start failing, the answer is more light, not a lower floor.
+⚠ **The enclosure is totally dark, LEDs off.** An OV5647 needs RAW10 for that (set in
+`sdkconfig.defaults`); on RAW8 its dark LSB is biased and over-dispersed.
 
 A node whose camera stops answers `E:<reason>` and is dropped and rebooted by the master.
 
@@ -53,7 +52,7 @@ all. That is why this node ran the recovery updater from Phase A until Phase C g
 | `GET /` | what this node is |
 | `GET /diag` | camera health and firmware identity |
 | `GET /camlog` | this node's per-window camera ring |
-| `GET /linearity` | exposure ladder: steady light vs flicker |
+| `GET /linearity` | mean_px per exposure; a light leak makes it grow |
 | `GET /otainfo` | image version / slot / state |
 | `POST /update` | push firmware; **409** only while a window is open (`g_measuring`) |
 | `POST /expose` | set exposure/gain; **409 for the whole session** (latch: M/K set, A or 60 s silence release) |
