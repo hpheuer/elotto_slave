@@ -661,23 +661,17 @@ static void link_task(void *arg)
                 if (ws.win_sigma_samples > 0) {
                     size_t l = strlen(resp);
                     snprintf(resp + l, sizeof(resp) - l, ",wsig=%.4f", ws.win_sigma);
-                    /*,ac= the lag-1..4 window autocorrelation z summed:
-                     * unit normal per lag, so variance 4 under independence.
-                     * Per-lag detail stays in /camlog. */
-                    l = strlen(resp);
-                    snprintf(resp + l, sizeof(resp) - l, ",ac=%.3f",
-                             ws.win_ac_z[0] + ws.win_ac_z[1] +
-                             ws.win_ac_z[2] + ws.win_ac_z[3]);
                 }
-                /* ,cut= segments in h1: the halves are unequal, and the
-                 * master's in-window trend t needs both sizes to stay
-                 * bias-free. */
-                if (have_h) {
+                /* ,mau= the Maurer universal-test z over the same bits
+                 * (gcp_last_maurer()), absent when the window held no
+                 * test block. */
+                double mau = gcp_last_maurer();
+                if (isfinite(mau)) {
                     size_t l = strlen(resp);
-                    snprintf(resp + l, sizeof(resp) - l, ",cut=%d", gcp_last_cut());
+                    snprintf(resp + l, sizeof(resp) - l, ",mau=%.3f", mau);
                 }
                 /* Same instant, into this node's own ring. The wire
-                 * carries wsig and nothing else; raw_sigma, mean_px, autocorr
+                 * carries wsig and mau and nothing else; raw_sigma, mean_px, autocorr
                  * and zero_diff stay here, and they are what says whether a
                  * disturbed window was a light leak, the sensor or neither.
                  * Tagged with the sequence of the 'M' being answered: the
@@ -685,7 +679,7 @@ static void link_task(void *arg)
                  * two needing a shared clock.
                  * ⚠ Inside the `resp[0] == 'Z'` branch on purpose — a faulted
                  * or voided run has no window worth recording. */
-                camera_winlog_push(seq);
+                camera_winlog_push(seq, mau);
             }
             link_reply(&from, seq, resp);
 
