@@ -62,6 +62,9 @@ static volatile bool g_cam_fault = false;   // camera died during the current ru
  * link task's stack. NULL means the allocation failed, which the 'K' handler
  * reports rather than papering over. */
 static camera_cal_t *s_cal;
+/* camera_init() succeeded at boot. Without it the node answers discovery with
+ * "E:no camera", so the master never takes it into a session. */
+static bool s_cam_ok = false;
 
 static double        g_baseline_mean = 0.0;
 static volatile bool g_abort         = false;
@@ -530,8 +533,9 @@ static void link_task(void *arg)
         }
 
         if (cmd[0] == 'P') {
-            link_reply(&from, seq, "OK");
-            TLOG("discovery from %s -> OK\n", inet_ntoa(from.sin_addr));
+            link_reply(&from, seq, s_cam_ok ? "OK" : "E:no camera");
+            TLOG("discovery from %s -> %s\n", inet_ntoa(from.sin_addr),
+                 s_cam_ok ? "OK" : "no camera");
 
         } else if (cmd[0] == 'K') {
             /* Camera calibration. The sweep itself lives in the shared
@@ -781,6 +785,7 @@ void app_main(void)
     // cannot be diagnosed, rebooted or reflashed.
     esp_err_t cam_ret = camera_init();
     if (cam_ret == ESP_OK) {
+        s_cam_ok = true;
         s_cal = heap_caps_calloc(1, sizeof(camera_cal_t), MALLOC_CAP_SPIRAM);
         if (!s_cal) ESP_LOGE(TAG, "no PSRAM for the calibration table");
         // Wait briefly for the first frame pair so the ring has bits before the
