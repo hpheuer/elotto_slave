@@ -254,9 +254,12 @@ static int seg_from_cmd(const char *arg)
 {
     int nseg = arg ? atoi(arg) : 0;
     if (nseg >= SEG_MIN && nseg <= SEG_MAX) return nseg;
-    TLOG("no segment count on the wire -- falling back to %d (pre-Phase-5 master?)\n",
-         CAM_SEGMENTS);
-    return CAM_SEGMENTS;
+    /* Refuse, do not substitute: a silent local default would put this node on
+     * a different window length than its peers, invisible to everything
+     * downstream. The caller turns the -1 into a V: void for this run. */
+    TLOG("segment count %d off the wire out of [%d,%d] -- refusing the run\n",
+         nseg, SEG_MIN, SEG_MAX);
+    return -1;
 }
 
 /* Called at each of the ~4 yields per run: pick up an abort the master may have
@@ -630,10 +633,17 @@ static void link_task(void *arg)
                      SLAVE_FLUSH_MS);
                 continue;
             }
+            int    nseg = seg_from_cmd(cmd + 1);
+            if (nseg < 0) {
+                /* Out-of-range segment count on the wire. Void, not fault: the
+                 * node is healthy, the command was wrong, so the master counts
+                 * this run void and keeps the node rather than dropping it. */
+                link_reply(&from, seq, "V:segment count out of range");
+                continue;
+            }
             g_measuring = true;
             double zraw = 0.0, zh1 = 0.0, zh2 = 0.0;
             bool   have_h = false;
-            int    nseg = seg_from_cmd(cmd + 1);
             bool   ok = gcp_zscore_pre_ok(nseg, &zraw, &have_h, &zh1, &zh2);
             g_measuring = false;
             char resp[112];
