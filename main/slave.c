@@ -536,9 +536,13 @@ static void link_task(void *arg)
         }
 
         if (cmd[0] == 'P') {
-            link_reply(&from, seq, s_cam_ok ? "OK" : "E:no camera");
+            /* ",cam=" names the bound chip for the master's camera-jump board.
+             * Tagged and appended: the master tests only the leading 'O'. */
+            char pr[32];
+            snprintf(pr, sizeof(pr), "OK,cam=%s", camera_sensor_name());
+            link_reply(&from, seq, s_cam_ok ? pr : "E:no camera");
             TLOG("discovery from %s -> %s\n", inet_ntoa(from.sin_addr),
-                 s_cam_ok ? "OK" : "no camera");
+                 s_cam_ok ? pr : "no camera");
 
         } else if (cmd[0] == 'K') {
             /* Camera calibration. The sweep itself lives in the shared
