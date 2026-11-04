@@ -79,7 +79,7 @@ Every datagram is one frame: `EL1 <seq> <payload>`. The payload is unchanged fro
 
 | Command | Reply | Meaning |
 |---|---|---|
-| `P` | `OK,cam=IMX219|OV5647` (`E:no camera` without one) | Discovery (broadcast) |
+| `P` | `OK,cam=IMX219` or `OK,cam=OV5647` (`E:no camera` without one) | Discovery (broadcast) |
 | `M<seg>` | `Z:<z>[,<h1>,<h2>][,wsig=]` | One measurement; halves of the same window; camera σ tagged |
 | `K<budget_ms>,<segs>` | `OK:<exp>,<gain>,<bias>,<mbit_s>,<G\|U>` | Sweep the exposure ladder and certify a rung |
 | `D` | `D:<ready>,<bias>,<σ>,<Mbit/s>,<stalls>,<stuck>,fw=<sha>,…` | Camera diagnostics; the master asks once per block for `/loops` |
