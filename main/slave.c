@@ -688,12 +688,13 @@ static void link_task(void *arg)
                     size_t l = strlen(resp);
                     snprintf(resp + l, sizeof(resp) - l, ",mau=%.3f", mau);
                 }
-                /* ,ser= the largest serial |z| of the same bits
-                 * (gcp_last_serial()), absent when there is none. */
+                /* ,ser= the serial z of the same bits: the Stouffer z of the
+                 * lag-1..4 bit agreement (gcp_last_serial()), reduced here so
+                 * the master only centres and combines. Absent when none. */
                 double ser = gcp_last_serial();
                 if (isfinite(ser)) {
                     size_t l = strlen(resp);
-                    snprintf(resp + l, sizeof(resp) - l, ",ser=%.2f", ser);
+                    snprintf(resp + l, sizeof(resp) - l, ",ser=%.3f", ser);
                 }
                 /* Same instant, into this node's own ring. The wire
                  * carries wsig and mau and nothing else; raw_sigma, mean_px, autocorr
