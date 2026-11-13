@@ -278,17 +278,11 @@ static bool gcp_yield_cb(void)
  * reason was the camera rather than an abort (the caller turns that into an
  * "E:" reply). A short run is not a small run: its z would be normalised by a
  * √segments it never reached, so a void run yields nothing at all. */
-static bool gcp_zscore_pre_ok(int nseg, double *out,
-                              bool *out_have_h, double *out_h1, double *out_h2)
+static bool gcp_zscore_ok(int nseg, double *out)
 {
-    double h1 = 0.0, h2 = 0.0;
-    gcp_result_t r = gcp_zscore_pre(nseg, gcp_yield_cb, out, &h1, &h2);
+    gcp_result_t r = gcp_zscore_raw(nseg, gcp_yield_cb, out);
     if (r == GCP_CAM_FAULT) g_cam_fault = true;
-    if (r != GCP_OK) { if (out_have_h) *out_have_h = false; return false; }
-    if (out_have_h) *out_have_h = nseg >= 2;
-    if (out_h1) *out_h1 = h1;
-    if (out_h2) *out_h2 = h2;
-    return true;
+    return r == GCP_OK;
 }
 
 /* ── HTTP: own /diag, plus the shared update endpoints ────────────────── */
@@ -646,9 +640,8 @@ static void link_task(void *arg)
                 continue;
             }
             g_measuring = true;
-            double zraw = 0.0, zh1 = 0.0, zh2 = 0.0;
-            bool   have_h = false;
-            bool   ok = gcp_zscore_pre_ok(nseg, &zraw, &have_h, &zh1, &zh2);
+            double zraw = 0.0;
+            bool   ok = gcp_zscore_ok(nseg, &zraw);
             g_measuring = false;
             char resp[112];
             if (!ok && g_cam_fault) {
@@ -656,20 +649,13 @@ static void link_task(void *arg)
                 log_camera_stats("CAMERA-FAULT");
             } else if (!ok) {
                 snprintf(resp, sizeof(resp), "V:aborted");
-            } else if (have_h) {
-                /* Z:<z>,<h1>,<h2>. One stream; halves of the same window. */
-                snprintf(resp, sizeof(resp), "Z:%.6f,%.6f,%.6f",
-                         zraw, zh1, zh2);
             } else {
                 snprintf(resp, sizeof(resp), "Z:%.6f", zraw);
             }
             /* ,wsig= is the camera's per-mini-run sigma over THIS window
              * and nothing else  — the number that says whether the bits
              * this z was built from were disturbed while they were taken.
-             * TAGGED and appended, like ,cons= and ,fw= on the D reply: the
-             * master's positional parse for z_pre/h1/h2 counts commas from the
-             * front and cannot trip over a field behind them, and a master too
-             * old to look simply never does.
+             * TAGGED and appended, like ,cons= and ,fw= on the D reply.
              * ⚠ Only on a Z. An E: is a fault and a V: is a void; neither has a
              * window to describe, and appending to them would put a number
              * behind a reason string that the parser reads as part of it. */
