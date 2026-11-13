@@ -688,6 +688,13 @@ static void link_task(void *arg)
                     size_t l = strlen(resp);
                     snprintf(resp + l, sizeof(resp) - l, ",mau=%.3f", mau);
                 }
+                /* ,ser= the largest serial |z| of the same bits
+                 * (gcp_last_serial()), absent when there is none. */
+                double ser = gcp_last_serial();
+                if (isfinite(ser)) {
+                    size_t l = strlen(resp);
+                    snprintf(resp + l, sizeof(resp) - l, ",ser=%.2f", ser);
+                }
                 /* Same instant, into this node's own ring. The wire
                  * carries wsig and mau and nothing else; raw_sigma, mean_px, autocorr
                  * and zero_diff stay here, and they are what says whether a
