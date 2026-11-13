@@ -534,6 +534,10 @@ static void link_task(void *arg)
              * Tagged and appended: the master tests only the leading 'O'. */
             char pr[32];
             snprintf(pr, sizeof(pr), "OK,cam=%s", camera_sensor_name());
+            /* Discovery is the master's session start: the one moment the
+             * record of the serial tests may be cleared. Not at the session
+             * latch, which a long pause also re-arms. */
+            camera_winlog_reset_record();
             link_reply(&from, seq, s_cam_ok ? pr : "E:no camera");
             TLOG("discovery from %s -> %s\n", inet_ntoa(from.sin_addr),
                  s_cam_ok ? pr : "no camera");
