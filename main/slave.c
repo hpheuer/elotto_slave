@@ -647,7 +647,7 @@ static void link_task(void *arg)
             double zraw = 0.0;
             bool   ok = gcp_zscore_ok(nseg, &zraw);
             g_measuring = false;
-            char resp[112];
+            char resp[ELOTTO_LINK_MAX - 20];   /* less the "EL1 <seq> " header */
             if (!ok && g_cam_fault) {
                 snprintf(resp, sizeof(resp), "E:camera stalled mid-run");
                 log_camera_stats("CAMERA-FAULT");
@@ -686,6 +686,11 @@ static void link_task(void *arg)
                     size_t l = strlen(resp);
                     snprintf(resp + l, sizeof(resp) - l, ",ser=%.3f", ser);
                 }
+                /* ,sl= the same window as z per time slot, counted from the
+                 * flush request that followed this 'M' (camera_win_slots()). */
+                float sl[EL_SLOTS];
+                camera_win_slots(el_slot_us(nseg), sl, EL_SLOTS);
+                el_slots_fmt(resp, sizeof(resp), sl);
                 /* Same instant, into this node's own ring. The wire
                  * carries wsig and mau and nothing else; raw_sigma, mean_px, autocorr
                  * and zero_diff stay here, and they are what says whether a
