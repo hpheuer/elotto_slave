@@ -686,6 +686,13 @@ static void link_task(void *arg)
                     size_t l = strlen(resp);
                     snprintf(resp + l, sizeof(resp) - l, ",ser=%.3f", ser);
                 }
+                /* ,byt= the byte-frequency z of the same bits
+                 * (gcp_last_bytechi()). Absent when none. */
+                double byt = gcp_last_bytechi();
+                if (isfinite(byt)) {
+                    size_t l = strlen(resp);
+                    snprintf(resp + l, sizeof(resp) - l, ",byt=%.3f", byt);
+                }
                 /* ,sl= the same window as z per time slot, counted from the
                  * flush request that followed this 'M' (camera_win_slots()). */
                 float sl[EL_SLOTS];
