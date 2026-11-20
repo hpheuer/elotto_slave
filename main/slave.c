@@ -289,9 +289,8 @@ static bool gcp_zscore_ok(int nseg, double *out)
 
 /* The predicate every sensor-touching handler passes down. It is deliberately
  * WIDER than g_measuring: it also covers the whole session (see the latch
- * above). ⚠ OTA keeps using g_measuring, not this — refusing an update for a
- * whole session would break the documented "abort, then flash" workflow, and an
- * OTA between two runs is merely wasteful, not corrupting. */
+ * above). OTA uses it too, so /update answers 409 for the whole session, like
+ * the master's. "Abort, then flash" still works: A releases the latch. */
 static bool slave_busy(void) { return g_measuring || session_active(); }
 
 /* Drop the pre-window bits and wait for a fresh pair. false = did not settle,
@@ -621,9 +620,10 @@ static void link_task(void *arg)
              * ring between runs, so it is FULL when a window opens and the
              * first ~524288 bits of the run were captured before the item
              * existed. Statistics are untouched — this is camera_ring_flush(),
-             * not camera_stats_reset(). */
-            g_measuring = false;
+             * not camera_stats_reset(). g_measuring stays set from the flush
+             * through the window; every exit below clears it. */
             if (!ring_flush_ok()) {
+                g_measuring = false;
                 /* ⚠ Answer with a refusal, never with a z. A timed-out flush
                  * never reached a pair boundary, so the ring was not even
                  * dropped and the run would consume precisely the stale bits
@@ -640,10 +640,10 @@ static void link_task(void *arg)
                 /* Out-of-range segment count on the wire. Void, not fault: the
                  * node is healthy, the command was wrong, so the master counts
                  * this run void and keeps the node rather than dropping it. */
+                g_measuring = false;
                 link_reply(&from, seq, "V:segment count out of range");
                 continue;
             }
-            g_measuring = true;
             double zraw = 0.0;
             bool   ok = gcp_zscore_ok(nseg, &zraw);
             g_measuring = false;
